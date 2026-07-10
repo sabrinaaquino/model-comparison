@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Launcher</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #0b0b0d;
+  }
+  canvas {
+    display: block;
+    background: #0b0b0d;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+  let floorY = 0;
+  let leftX = 0, rightX = 0;
+
+  const GRAVITY = 1400;
+  const REST_WALL = 0.55;
+  const REST_FLOOR = 0.45;
+  const REST_BALL = 0.25;
+  const FRICTION = 0.985;
+  const RADIUS = 7;
+  const MAX_OBJECTS = 120;
+  const SUBSTEPS = 6;
+  const TRAIL_LEN = 10;
+  const LAUNCH_INTERVAL = 0.075;
+
+  let objects = [];
+  let nextId = 0;
+  let oldestIndex = 0;
+  let launchTimer = 0;
+  let totalLaunched = 0;
+  let frameCount = 0;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W;
+    canvas.height = H;
+    floorY = H - 40;
+    leftX = 0;
+    rightX = W;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function makeObject() {
+    return {
+      x: 0, y: 0, vx: 0, vy: 0,
+      id: 0, age: 0,
+      trail: []
+    };
+  }
+
+  function launch() {
+    let o;
+    if (objects.length < MAX_OBJECTS) {
+      o = makeObject();
+      o.id = nextId++;
+      objects.push(o);
+    } else {
+      o = objects[oldestIndex];
+      o.id = nextId++;
+      o.trail.length = 0;
+      oldestIndex = (oldestIndex + 1) % MAX_OBJECTS;
+    }
+
+    const launchX = 70 + Math.random() * 60;
+    const launchY = floorY - 14;
+    const angle = -Math.PI * (0.15 + Math.random() * 0.22);
+    const speed = 680 + Math.random() * 320;
+
+    o.x = launchX;
+    o.y = launchY;
+    o.vx = Math.cos(angle) * speed;
+    o.vy = Math.sin(angle) * speed;
+    o.age = 0;
+    o.trail.length = 0;
+
+    totalLaunched++;
+  }
+
+  function step(dt) {
+    const sdt = dt / SUBSTEPS;
+
+    for (let s = 0; s < SUBSTEPS; s++) {
+      for (let i = 0; i < objects.length; i++) {
+        const o = objects[i];
+        o.vy += GRAVITY * sdt;
+        o.x += o.vx * sdt;
+        o.y += o.vy * sdt;
+      }
+
+      for (let i = 0; i < objects.length; i++) {
+        const o = objects[i];
+        if (o.x - RADIUS < leftX) {
+          o.x = leftX + RADIUS;
+          if (o.vx < 0) o.vx = -o.vx * REST_WALL;
+          o.vx *= FRICTION;
+        }
+        if (o.x + RADIUS > rightX) {
+          o.x = rightX - RADIUS;
+          if (o.vx > 0) o.vx = -o.vx * REST_WALL;
+          o.vx *= FRICTION;
+        }
+        if (o.y + RADIUS > floorY) {
+          o.y = floorY - RADIUS;
+          if (o.vy > 0) o.vy = -o.vy * REST_FLOOR;
+          o.vx *= FRICTION;
+          o.vy *= FRICTION;
+          if (Math.abs(o.vy) < 28) o.vy = 0;
+        }
+        if (o.y - RADIUS < 0) {
+          o.y = RADIUS;
+          if (o.vy < 0) o.vy = -o.vy * REST_WALL;
+        }
+      }
+
+      for (let iter = 0; iter < 2; iter++) {
+        for (let i = 0; i < objects.length; i++) {
+          const a = objects[i];
+          for (let j = i + 1; j < objects.length; j++) {
+            const b = objects[j];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dsq = dx * dx + dy * dy;
+            const md = 2 * RADIUS;
+            if (dsq < md * md && dsq > 0.00001) {
+              const d = Math.sqrt(dsq);
+              const nx = dx / d;
+              const ny = dy / d;
+              const overlap = md - d;
+              const corr = overlap * 0.5;
+              a.x -= nx * corr;
+              a.y -= ny * corr;
+              b.x += nx * corr;
+              b.y += ny * corr;
+
+              const rvx = b.vx - a.vx;
+              const rvy = b.vy - a.vy;
+              const vn = rvx * nx + rvy * ny;
+              if (vn < 0) {
+                const impulse = -(1 + REST_BALL) * vn * 0.5;
+                a.vx -= impulse * nx;
+                a.vy -= impulse * ny;
+                b.vx += impulse * nx;
+                b.vy += impulse * ny;
+              }
+            }
+          }
+        }
+
+        for (let i = 0; i < objects.length; i++) {
+          const o = objects[i];
+          if (o.x - RADIUS < leftX) o.x = leftX + RADIUS;
+          if (o.x + RADIUS > rightX) o.x = rightX - RADIUS;
+          if (o.y + RADIUS > floorY) o.y = floorY - RADIUS;
+          if (o.y - RADIUS < 0) o.y = RADIUS;
+        }
+      }
+    }
+
+    if (frameCount % 2 === 0) {
+      for (let i = 0; i < objects.length; i++) {
+        const o = objects[i];
+        o.trail.push(o.x);
+        o.trail.push(o.y);
+        while (o.trail.length > TRAIL_LEN * 2) {
+          o.trail.shift();
+          o.trail.shift();
+        }
+      }
+    }
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = '#e6e6e6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, floorY);
+    ctx.lineTo(W, floorY);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, H);
+    ctx.moveTo(W, 0);
+    ctx.lineTo(W, H);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 138, 61, 0.3)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < objects.length; i++) {
+      const o = objects[i];
+      const t = o.trail;
+      if (t.length < 4) continue;
+      ctx.beginPath();
+      ctx.moveTo(t[0], t[1]);
+      for (let k = 2; k < t.length; k += 2) {
+        ctx.lineTo(t[k], t[k + 1]);
+      }
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#ff8a3d';
+    for (let i = 0; i < objects.length; i++) {
+      const o = objects[i];
+      ctx.beginPath();
+      ctx.arc(o.x, o.y, RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('objects: ' + objects.length, 10, 10);
+    ctx.fillText('launched: ' + totalLaunched, 10, 26);
+  }
+
+  let lastTime = performance.now();
+  function loop(now) {
+    let dt = (now - lastTime) / 1000;
+    lastTime = now;
+    if (dt > 0.05) dt = 0.05;
+    frameCount++;
+
+    launchTimer += dt;
+    while (launchTimer >= LAUNCH_INTERVAL) {
+      launchTimer -= LAUNCH_INTERVAL;
+      launch();
+    }
+
+    step(dt);
+    draw();
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

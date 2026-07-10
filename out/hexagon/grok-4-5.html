@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ball in Spinning Hexagon</title>
+<style>
+*{margin:0;padding:0;overflow:hidden}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H, cx, cy, hexR;
+const BALL_R = 12;
+const GRAVITY = 900;
+const OMEGA = 0.9;
+const REST = 0.72;
+const WALL_FRIC = 0.35;
+const AIR_DRAG = 0.15;
+
+let angle = 0;
+let ball = { x: 0, y: 0, vx: 0, vy: 0 };
+let trail = [];
+let bounces = 0;
+let lastT = performance.now();
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  cx = W * 0.5;
+  cy = H * 0.5;
+  hexR = Math.min(W, H) * 0.38;
+  if (ball.x === 0 && ball.y === 0) {
+    ball.x = cx;
+    ball.y = cy - hexR * 0.25;
+  }
+}
+window.addEventListener('resize', resize);
+resize();
+
+function hexVerts(a, R) {
+  const v = [];
+  for (let i = 0; i < 6; i++) {
+    const t = a + i * Math.PI / 3;
+    v.push({ x: cx + R * Math.cos(t), y: cy + R * Math.sin(t) });
+  }
+  return v;
+}
+
+function resolveCollisions() {
+  const verts = hexVerts(angle, hexR);
+  for (let i = 0; i < 6; i++) {
+    const v1 = verts[i];
+    const v2 = verts[(i + 1) % 6];
+    const dx = v2.x - v1.x;
+    const dy = v2.y - v1.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-8) continue;
+    const nx = dy / len;
+    const ny = -dx / len;
+    const dist = (ball.x - v1.x) * nx + (ball.y - v1.y) * ny;
+    const pen = dist + BALL_R;
+    if (pen > 0) {
+      ball.x -= pen * nx;
+      ball.y -= pen * ny;
+
+      const contactX = ball.x + nx * BALL_R;
+      const contactY = ball.y + ny * BALL_R;
+      const rx = contactX - cx;
+      const ry = contactY - cy;
+      const wallVx = -OMEGA * ry;
+      const wallVy = OMEGA * rx;
+
+      let rvx = ball.vx - wallVx;
+      let rvy = ball.vy - wallVy;
+      const vn = rvx * nx + rvy * ny;
+
+      if (vn > 0) {
+        if (vn > 40) bounces++;
+        ball.vx -= (1 + REST) * vn * nx;
+        ball.vy -= (1 + REST) * vn * ny;
+
+        rvx = ball.vx - wallVx;
+        rvy = ball.vy - wallVy;
+        const vn2 = rvx * nx + rvy * ny;
+        const vtx = rvx - vn2 * nx;
+        const vty = rvy - vn2 * ny;
+        const vtMag = Math.hypot(vtx, vty);
+        if (vtMag > 1e-6) {
+          const maxFric = WALL_FRIC * Math.abs((1 + REST) * vn);
+          const f = Math.min(maxFric, vtMag);
+          ball.vx -= (f / vtMag) * vtx;
+          ball.vy -= (f / vtMag) * vty;
+        }
+      } else {
+        const stick = 0.02;
+        ball.vx -= stick * vn * nx;
+        ball.vy -= stick * vn * ny;
+      }
+    }
+  }
+}
+
+function step(dt) {
+  angle += OMEGA * dt;
+
+  ball.vy += GRAVITY * dt;
+  const drag = Math.exp(-AIR_DRAG * dt);
+  ball.vx *= drag;
+  ball.vy *= drag;
+
+  const sub = 4;
+  const sdt = dt / sub;
+  for (let s = 0; s < sub; s++) {
+    ball.x += ball.vx * sdt;
+    ball.y += ball.vy * sdt;
+    for (let k = 0; k < 3; k++) resolveCollisions();
+  }
+
+  trail.push({ x: ball.x, y: ball.y });
+  if (trail.length > 55) trail.shift();
+}
+
+function draw() {
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  if (trail.length > 1) {
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,138,61,0.3)';
+    ctx.lineWidth = 1;
+    ctx.moveTo(trail[0].x, trail[0].y);
+    for (let i = 1; i < trail.length; i++) {
+      ctx.lineTo(trail[i].x, trail[i].y);
+    }
+    ctx.stroke();
+  }
+
+  const verts = hexVerts(angle, hexR);
+  ctx.beginPath();
+  ctx.moveTo(verts[0].x, verts[0].y);
+  for (let i = 1; i < 6; i++) ctx.lineTo(verts[i].x, verts[i].y);
+  ctx.closePath();
+  ctx.strokeStyle = '#e6e6e6';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+  ctx.fillStyle = '#ff8a3d';
+  ctx.fill();
+
+  ctx.fillStyle = '#e6e6e6';
+  ctx.font = '12px monospace';
+  ctx.fillText('bounces: ' + bounces, 10, 22);
+}
+
+function loop(now) {
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  if (dt > 0.05) dt = 0.05;
+  step(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

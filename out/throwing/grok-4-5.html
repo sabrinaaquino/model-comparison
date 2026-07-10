@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>throw</title>
+<style>
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0b0d; }
+canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 0, H = 0;
+
+  var R = 7;
+  var MAX = 120;
+  var G = 0.22;
+  var REST_W = 0.55;
+  var REST_B = 0.45;
+  var FLOOR_F = 0.88;
+  var AIR = 0.9992;
+  var SUBS = 4;
+  var TRAIL_LEN = 18;
+  var MAX_V = 18;
+
+  var balls = new Array(MAX);
+  var head = 0;
+  var throwAcc = 0;
+  var throwEvery = 7;
+  var active = 0;
+
+  function makeBall() {
+    return { x: 0, y: 0, vx: 0, vy: 0, on: false, trail: [], ti: 0 };
+  }
+
+  for (var i = 0; i < MAX; i++) balls[i] = makeBall();
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W;
+    canvas.height = H;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function clampV(b) {
+    var s2 = b.vx * b.vx + b.vy * b.vy;
+    if (s2 > MAX_V * MAX_V) {
+      var s = Math.sqrt(s2);
+      b.vx = b.vx / s * MAX_V;
+      b.vy = b.vy / s * MAX_V;
+    }
+  }
+
+  function throwOne() {
+    var b = balls[head];
+    head = (head + 1) % MAX;
+    if (!b.on) active++;
+    b.on = true;
+    b.x = 36 + Math.random() * 10;
+    b.y = H - 70 - Math.random() * 16;
+    var ang = -1.05 + (Math.random() - 0.5) * 0.95;
+    var spd = 9 + Math.random() * 9;
+    b.vx = Math.cos(ang) * spd;
+    b.vy = Math.sin(ang) * spd;
+    b.trail.length = 0;
+    b.ti = 0;
+    clampV(b);
+  }
+
+  function resolveWalls(b) {
+    if (b.x < R) {
+      b.x = R;
+      if (b.vx < 0) b.vx = -b.vx * REST_W;
+    } else if (b.x > W - R) {
+      b.x = W - R;
+      if (b.vx > 0) b.vx = -b.vx * REST_W;
+    }
+    if (b.y < R) {
+      b.y = R;
+      if (b.vy < 0) b.vy = -b.vy * REST_W;
+    } else if (b.y > H - R) {
+      b.y = H - R;
+      if (b.vy > 0) {
+        b.vy = -b.vy * REST_W;
+        if (Math.abs(b.vy) < 0.35) b.vy = 0;
+      }
+      b.vx *= FLOOR_F;
+      if (Math.abs(b.vx) < 0.02) b.vx = 0;
+    }
+  }
+
+  function collidePair(a, b) {
+    var dx = b.x - a.x;
+    var dy = b.y - a.y;
+    var d2 = dx * dx + dy * dy;
+    var minD = R + R;
+    if (d2 >= minD * minD || d2 === 0) return;
+    var d = Math.sqrt(d2);
+    var nx = dx / d;
+    var ny = dy / d;
+    var overlap = minD - d;
+    var corr = overlap * 0.5 + 0.01;
+    a.x -= nx * corr;
+    a.y -= ny * corr;
+    b.x += nx * corr;
+    b.y += ny * corr;
+
+    var rvx = b.vx - a.vx;
+    var rvy = b.vy - a.vy;
+    var vn = rvx * nx + rvy * ny;
+    if (vn >= 0) return;
+    var e = REST_B;
+    if (Math.abs(vn) < 0.8) e *= 0.5;
+    var j = -(1 + e) * vn * 0.5;
+    a.vx -= j * nx;
+    a.vy -= j * ny;
+    b.vx += j * nx;
+    b.vy += j * ny;
+
+    var tx = -ny;
+    var ty = nx;
+    var vt = rvx * tx + rvy * ty;
+    var mu = 0.12;
+    var jt = vt * 0.5;
+    if (jt > mu * j) jt = mu * j;
+    if (jt < -mu * j) jt = -mu * j;
+    a.vx += jt * tx;
+    a.vy += jt * ty;
+    b.vx -= jt * tx;
+    b.vy -= jt * ty;
+  }
+
+  function stepPhysics() {
+    var inv = 1 / SUBS;
+    var g = G * inv;
+    var i, j, b, s;
+
+    for (s = 0; s < SUBS; s++) {
+      for (i = 0; i < MAX; i++) {
+        b = balls[i];
+        if (!b.on) continue;
+        b.vy += g;
+        b.vx *= AIR;
+        b.vy *= AIR;
+        b.x += b.vx * inv;
+        b.y += b.vy * inv;
+        clampV(b);
+        resolveWalls(b);
+      }
+
+      for (i = 0; i < MAX; i++) {
+        if (!balls[i].on) continue;
+        for (j = i + 1; j < MAX; j++) {
+          if (!balls[j].on) continue;
+          collidePair(balls[i], balls[j]);
+        }
+      }
+
+      for (i = 0; i < MAX; i++) {
+        b = balls[i];
+        if (!b.on) continue;
+        resolveWalls(b);
+        clampV(b);
+      }
+    }
+
+    for (i = 0; i < MAX; i++) {
+      b = balls[i];
+      if (!b.on) continue;
+      if (b.trail.length < TRAIL_LEN) {
+        b.trail.push({ x: b.x, y: b.y });
+      } else {
+        b.trail[b.ti].x = b.x;
+        b.trail[b.ti].y = b.y;
+        b.ti = (b.ti + 1) % TRAIL_LEN;
+      }
+    }
+  }
+
+  function update() {
+    throwAcc++;
+    if (throwAcc >= throwEvery) {
+      throwAcc = 0;
+      throwOne();
+    }
+    stepPhysics();
+  }
+
+  function drawTrails() {
+    ctx.strokeStyle = 'rgba(255,138,61,0.3)';
+    ctx.lineWidth = 1;
+    var i, b, t, n, k, idx, p0, p1;
+    for (i = 0; i < MAX; i++) {
+      b = balls[i];
+      if (!b.on) continue;
+      t = b.trail;
+      n = t.length;
+      if (n < 2) continue;
+      ctx.beginPath();
+      if (n < TRAIL_LEN) {
+        ctx.moveTo(t[0].x, t[0].y);
+        for (k = 1; k < n; k++) ctx.lineTo(t[k].x, t[k].y);
+      } else {
+        idx = b.ti;
+        p0 = t[idx];
+        ctx.moveTo(p0.x, p0.y);
+        for (k = 1; k < n; k++) {
+          idx = (b.ti + k) % TRAIL_LEN;
+          p1 = t[idx];
+          ctx.lineTo(p1.x, p1.y);
+        }
+      }
+      ctx.stroke();
+    }
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = '#e6e6e6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(1, 0);
+    ctx.lineTo(1, H - 1);
+    ctx.moveTo(W - 1, 0);
+    ctx.lineTo(W - 1, H - 1);
+    ctx.moveTo(0, H - 1);
+    ctx.lineTo(W, H - 1);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(18, H - 28);
+    ctx.lineTo(18, H - 78);
+    ctx.lineTo(52, H - 108);
+    ctx.stroke();
+
+    drawTrails();
+
+    ctx.fillStyle = '#ff8a3d';
+    var i, b;
+    for (i = 0; i < MAX; i++) {
+      b = balls[i];
+      if (!b.on) continue;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, R, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('objects: ' + active, 10, 10);
+  }
+
+  function frame() {
+    update();
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  for (var k = 0; k < 8; k++) throwOne();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

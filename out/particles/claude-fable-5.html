@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 0, H = 0;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var N = 900;
+  var GRAVITY = 900;        // px/s^2
+  var DRAG = 0.15;          // per second
+  var RESTITUTION = 0.55;   // floor bounce energy loss
+  var FADE_TIME = 0.8;      // seconds of fade before recycle
+
+  var particles = [];
+
+  function spawn(p) {
+    p.x = W / 2 + (Math.random() - 0.5) * 10;
+    p.y = H - 4;
+    var angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.7; // spread around straight up
+    var speed = 500 + Math.random() * 450;
+    p.vx = Math.cos(angle) * speed;
+    p.vy = Math.sin(angle) * speed;
+    p.life = 2.5 + Math.random() * 2.5;
+    p.age = 0;
+  }
+
+  for (var i = 0; i < N; i++) {
+    var p = { x: 0, y: 0, vx: 0, vy: 0, life: 1, age: 0 };
+    spawn(p);
+    p.age = Math.random() * p.life; // stagger initial ages for continuous emission
+    particles.push(p);
+  }
+
+  // color ramp: slow #3b82f6 -> medium #e6e6e6 -> fast #ffd23d
+  var C_SLOW = [0x3b, 0x82, 0xf6];
+  var C_MED  = [0xe6, 0xe6, 0xe6];
+  var C_FAST = [0xff, 0xd2, 0x3d];
+  var SPEED_MID = 450, SPEED_MAX = 900;
+
+  function speedColor(s) {
+    var a, b, t;
+    if (s <= SPEED_MID) {
+      a = C_SLOW; b = C_MED; t = s / SPEED_MID;
+    } else {
+      a = C_MED; b = C_FAST; t = (s - SPEED_MID) / (SPEED_MAX - SPEED_MID);
+      if (t > 1) t = 1;
+    }
+    var r = (a[0] + (b[0] - a[0]) * t) | 0;
+    var g = (a[1] + (b[1] - a[1]) * t) | 0;
+    var bl = (a[2] + (b[2] - a[2]) * t) | 0;
+    return [r, g, bl];
+  }
+
+  // FPS counter
+  var fps = 60, fpsFrames = 0, fpsTime = 0;
+  var lastTime = performance.now();
+  var TWO_PI = Math.PI * 2;
+
+  function frame(now) {
+    var dt = (now - lastTime) / 1000;
+    lastTime = now;
+    if (dt > 0.05) dt = 0.05;
+
+    fpsFrames++;
+    fpsTime += dt;
+    if (fpsTime >= 0.5) {
+      fps = Math.round(fpsFrames / fpsTime);
+      fpsFrames = 0;
+      fpsTime = 0;
+    }
+
+    // background
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, W, H);
+
+    var dragFactor = 1 - DRAG * dt;
+    if (dragFactor < 0) dragFactor = 0;
+
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+
+      p.vy += GRAVITY * dt;
+      p.vx *= dragFactor;
+      p.vy *= dragFactor;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      // floor bounce with energy loss
+      if (p.y > H - 2) {
+        p.y = H - 2;
+        if (p.vy > 0) {
+          p.vy = -p.vy * RESTITUTION;
+          p.vx *= 0.9;
+        }
+      }
+
+      p.age += dt;
+      if (p.age >= p.life || p.x < -20 || p.x > W + 20) {
+        spawn(p);
+      }
+
+      // alpha: fade out during last FADE_TIME seconds of life
+      var remaining = p.life - p.age;
+      var alpha = remaining < FADE_TIME ? remaining / FADE_TIME : 1;
+      if (alpha < 0) alpha = 0;
+
+      var s = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      var c = speedColor(s);
+
+      ctx.fillStyle = 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2, 0, TWO_PI);
+      ctx.fill();
+    }
+
+    // FPS text
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('FPS: ' + fps, 10, 10);
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

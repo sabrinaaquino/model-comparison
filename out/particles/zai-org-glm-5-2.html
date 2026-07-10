@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Particle Fountain</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Floor and wall boundary drawing per spec (static structure)
+  function drawBounds() {
+    ctx.strokeStyle = '#e6e6e6';
+    ctx.lineWidth = 2;
+    // floor
+    ctx.beginPath();
+    ctx.moveTo(0, H - 1);
+    ctx.lineTo(W, H - 1);
+    ctx.stroke();
+    // side walls
+    ctx.beginPath();
+    ctx.moveTo(1, 0);
+    ctx.lineTo(1, H);
+    ctx.moveTo(W - 1, 0);
+    ctx.lineTo(W - 1, H);
+    ctx.stroke();
+  }
+
+  // Color ramp: slow #3b82f6, medium #e6e6e6, fast #ffd23d
+  const cSlow = [0x3b, 0x82, 0xf6];
+  const cMed  = [0xe6, 0xe6, 0xe6];
+  const cFast = [0xff, 0xd2, 0x3d];
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function ramp(speed) {
+    // map speed 0..1 (slow) , 1..2 (medium->fast)
+    let r, g, b;
+    if (speed <= 1) {
+      const t = speed;
+      r = lerp(cSlow[0], cMed[0], t);
+      g = lerp(cSlow[1], cMed[1], t);
+      b = lerp(cSlow[2], cMed[2], t);
+    } else {
+      const t = Math.min(1, speed - 1);
+      r = lerp(cMed[0], cFast[0], t);
+      g = lerp(cMed[1], cFast[1], t);
+      b = lerp(cMed[2], cFast[2], t);
+    }
+    return 'rgb(' + (r|0) + ',' + (g|0) + ',' + (b|0) + ')';
+  }
+
+  // Particle pool
+  const MAX = 1000;
+  const particles = new Array(MAX);
+  for (let i = 0; i < MAX; i++) {
+    particles[i] = {
+      x: 0, y: 0, vx: 0, vy: 0,
+      life: 0, maxLife: 0, alive: false
+    };
+  }
+
+  const gravity = 900; // px/s^2
+  const drag = 0.12;   // per second velocity damping factor (slight)
+  const restitution = 0.45;
+  const floorY = () => H - 1;
+
+  function emit(p) {
+    const cx = W / 2;
+    const cy = H - 2;
+    p.x = cx + (Math.random() - 0.5) * 6;
+    p.y = cy;
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.9; // spread
+    const speed = 520 + Math.random() * 360;
+    p.vx = Math.cos(angle) * speed;
+    p.vy = Math.sin(angle) * speed;
+    p.maxLife = 2.2 + Math.random() * 1.6;
+    p.life = p.maxLife;
+    p.alive = true;
+  }
+
+  // Pre-fill
+  for (let i = 0; i < MAX; i++) {
+    emit(particles[i]);
+    particles[i].life = Math.random() * particles[i].maxLife;
+  }
+
+  // FPS tracking
+  let last = performance.now();
+  let fps = 60;
+  let fpsAccum = 0, fpsCount = 0, fpsTimer = 0;
+
+  function frame(now) {
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05; // clamp to avoid jumps
+
+    // FPS
+    fpsAccum += 1 / Math.max(dt, 1e-6);
+    fpsCount++;
+    fpsTimer += dt;
+    if (fpsTimer >= 0.25) {
+      fps = fpsAccum / fpsCount;
+      fpsAccum = 0; fpsCount = 0; fpsTimer = 0;
+    }
+
+    // Clear
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, W, H);
+
+    drawBounds();
+
+    // Update + draw particles
+    // We'll draw filled 2px circles (radius 2). For perf, use fillRect-ish via arc.
+    const r = 2;
+    const fy = floorY();
+    let aliveCount = 0;
+
+    for (let i = 0; i < MAX; i++) {
+      const p = particles[i];
+      if (!p.alive) continue;
+
+      // physics
+      p.vy += gravity * dt;
+      // slight air drag
+      const dragFactor = Math.exp(-drag * dt);
+      p.vx *= dragFactor;
+      p.vy *= dragFactor;
+
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      // bounce off floor
+      if (p.y > fy - r) {
+        p.y = fy - r;
+        if (p.vy > 0) {
+          p.vy = -p.vy * restitution;
+          p.vx *= 0.85;
+        }
+      }
+      // side walls bounce (keep contained)
+      if (p.x < r) { p.x = r; p.vx = Math.abs(p.vx) * 0.6; }
+      else if (p.x > W - r) { p.x = W - r; p.vx = -Math.abs(p.vx) * 0.6; }
+
+      p.life -= dt;
+      if (p.life <= 0) {
+        // recycle
+        emit(p);
+      }
+
+      aliveCount++;
+
+      // color by speed
+      const sp = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      // normalize: ~0..~880+. Map 0..880 to 0..2
+      const norm = Math.min(2, sp / 440);
+      const col = ramp(norm);
+
+      // fade out near end of life
+      let alpha = 1;
+      const fade = 0.25;
+      if (p.life < fade * p.maxLife) alpha = Math.max(0, p.life / (fade * p.maxLife));
+      // also fade in at birth briefly
+      const age = p.maxLife - p.life;
+      if (age < 0.1) alpha *= age / 0.1;
+
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // FPS / counter text
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.fillText('FPS: ' + fps.toFixed(1), 10, 10);
+    ctx.fillText('Particles: ' + aliveCount, 10, 26);
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

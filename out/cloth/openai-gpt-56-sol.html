@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  const COLS = 32;
+  const ROWS = 22;
+  const FIXED_DT = 1 / 60;
+  const RELAXATION_ITERATIONS = 8;
+
+  let width = 1;
+  let height = 1;
+  let points = [];
+  let constraints = [];
+  let simulationTime = 0;
+  let accumulator = 0;
+  let previousTime = performance.now();
+
+  function addConstraint(a, b, restLength, stiffness) {
+    constraints.push({ a, b, restLength, stiffness });
+  }
+
+  function initializeCloth() {
+    points = [];
+    constraints = [];
+    simulationTime = 0;
+    accumulator = 0;
+
+    const top = Math.max(18, Math.min(72, height * 0.12));
+    const horizontalRoom = Math.max(1, width * 0.78);
+    const verticalRoom = Math.max(1, height - top - 28);
+    const spacing = Math.max(
+      0.5,
+      Math.min(
+        22,
+        horizontalRoom / (COLS - 1),
+        verticalRoom / (ROWS - 1)
+      )
+    );
+
+    const clothWidth = spacing * (COLS - 1);
+    const startX = (width - clothWidth) * 0.5;
+
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        const x = startX + col * spacing;
+        const y = top + row * spacing;
+        points.push({
+          x,
+          y,
+          oldX: x,
+          oldY: y,
+          pinX: x,
+          pinY: y,
+          pinned: row === 0,
+          row,
+          col
+        });
+      }
+    }
+
+    const index = (row, col) => row * COLS + col;
+
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        if (col < COLS - 1) {
+          addConstraint(
+            points[index(row, col)],
+            points[index(row, col + 1)],
+            spacing,
+            1
+          );
+        }
+
+        if (row < ROWS - 1) {
+          addConstraint(
+            points[index(row, col)],
+            points[index(row + 1, col)],
+            spacing,
+            1
+          );
+        }
+
+        if (row < ROWS - 1 && col < COLS - 1) {
+          addConstraint(
+            points[index(row, col)],
+            points[index(row + 1, col + 1)],
+            spacing * Math.SQRT2,
+            0.035
+          );
+          addConstraint(
+            points[index(row, col + 1)],
+            points[index(row + 1, col)],
+            spacing * Math.SQRT2,
+            0.035
+          );
+        }
+
+        if (col < COLS - 2) {
+          addConstraint(
+            points[index(row, col)],
+            points[index(row, col + 2)],
+            spacing * 2,
+            0.02
+          );
+        }
+
+        if (row < ROWS - 2) {
+          addConstraint(
+            points[index(row, col)],
+            points[index(row + 2, col)],
+            spacing * 2,
+            0.02
+          );
+        }
+      }
+    }
+  }
+
+  function resize() {
+    width = Math.max(1, window.innerWidth);
+    height = Math.max(1, window.innerHeight);
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    initializeCloth();
+    previousTime = performance.now();
+  }
+
+  function integrate(dt) {
+    const dtSquared = dt * dt;
+    const gravity = 650;
+    const broadWind = Math.sin(simulationTime * 1.15) * 170;
+    const gust = Math.sin(simulationTime * 0.43 + 1.4) * 80;
+
+    for (const point of points) {
+      if (point.pinned) {
+        point.x = point.pinX;
+        point.y = point.pinY;
+        point.oldX = point.pinX;
+        point.oldY = point.pinY;
+        continue;
+      }
+
+      const rowAmount = point.row / (ROWS - 1);
+      const ripple = Math.sin(
+        simulationTime * 2.2 +
+        point.row * 0.38 +
+        point.col * 0.16
+      ) * 130;
+
+      const wind = broadWind + gust + ripple * (0.25 + rowAmount * 0.75);
+      const velocityX = (point.x - point.oldX) * 0.994;
+      const velocityY = (point.y - point.oldY) * 0.994;
+
+      const currentX = point.x;
+      const currentY = point.y;
+
+      point.x += velocityX + wind * dtSquared;
+      point.y += velocityY + gravity * dtSquared;
+      point.oldX = currentX;
+      point.oldY = currentY;
+    }
+  }
+
+  function satisfyConstraint(constraint) {
+    const a = constraint.a;
+    const b = constraint.b;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance < 0.000001) return;
+
+    const correction =
+      ((distance - constraint.restLength) / distance) *
+      constraint.stiffness;
+
+    if (!a.pinned && !b.pinned) {
+      const offsetX = dx * correction * 0.5;
+      const offsetY = dy * correction * 0.5;
+      a.x += offsetX;
+      a.y += offsetY;
+      b.x -= offsetX;
+      b.y -= offsetY;
+    } else if (!a.pinned) {
+      a.x += dx * correction;
+      a.y += dy * correction;
+    } else if (!b.pinned) {
+      b.x -= dx * correction;
+      b.y -= dy * correction;
+    }
+  }
+
+  function constrainToCanvas(point) {
+    if (point.pinned) return;
+
+    const margin = 3;
+    const velocityX = point.x - point.oldX;
+    const velocityY = point.y - point.oldY;
+
+    if (point.x < margin) {
+      point.x = margin;
+      point.oldX = point.x + velocityX * 0.12;
+    } else if (point.x > width - margin) {
+      point.x = width - margin;
+      point.oldX = point.x + velocityX * 0.12;
+    }
+
+    if (point.y < margin) {
+      point.y = margin;
+      point.oldY = point.y + velocityY * 0.12;
+    } else if (point.y > height - margin) {
+      point.y = height - margin;
+      point.oldY = point.y + velocityY * 0.12;
+    }
+  }
+
+  function solveConstraints() {
+    for (let iteration = 0; iteration < RELAXATION_ITERATIONS; iteration++) {
+      if ((iteration & 1) === 0) {
+        for (let i = 0; i < constraints.length; i++) {
+          satisfyConstraint(constraints[i]);
+        }
+      } else {
+        for (let i = constraints.length - 1; i >= 0; i--) {
+          satisfyConstraint(constraints[i]);
+        }
+      }
+
+      for (const point of points) {
+        if (point.pinned) {
+          point.x = point.pinX;
+          point.y = point.pinY;
+          point.oldX = point.pinX;
+          point.oldY = point.pinY;
+        } else {
+          constrainToCanvas(point);
+        }
+      }
+    }
+  }
+
+  function update(dt) {
+    simulationTime += dt;
+    integrate(dt);
+    solveConstraints();
+  }
+
+  function draw() {
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = "#e6e6e6";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    for (let row = 0; row < ROWS; row++) {
+      const first = points[row * COLS];
+      ctx.moveTo(first.x, first.y);
+      for (let col = 1; col < COLS; col++) {
+        const point = points[row * COLS + col];
+        ctx.lineTo(point.x, point.y);
+      }
+    }
+
+    for (let col = 0; col < COLS; col++) {
+      const first = points[col];
+      ctx.moveTo(first.x, first.y);
+      for (let row = 1; row < ROWS; row++) {
+        const point = points[row * COLS + col];
+        ctx.lineTo(point.x, point.y);
+      }
+    }
+
+    ctx.stroke();
+
+    ctx.fillStyle = "#ff8a3d";
+    ctx.beginPath();
+    for (let col = 0; col < COLS; col++) {
+      const point = points[col];
+      ctx.moveTo(point.x + 4, point.y);
+      ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
+
+  function animate(now) {
+    const elapsed = Math.min(0.05, Math.max(0, (now - previousTime) / 1000));
+    previousTime = now;
+    accumulator += elapsed;
+
+    let steps = 0;
+    while (accumulator >= FIXED_DT && steps < 4) {
+      update(FIXED_DT);
+      accumulator -= FIXED_DT;
+      steps++;
+    }
+
+    draw();
+    requestAnimationFrame(animate);
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

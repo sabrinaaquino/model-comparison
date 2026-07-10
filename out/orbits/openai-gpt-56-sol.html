@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  let width = 0;
+  let height = 0;
+  let dpr = 1;
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+
+  const G = 1;
+  const SOFTENING = 0.03;
+  const SOFTENING_SQ = SOFTENING * SOFTENING;
+  const FIXED_DT = 1 / 480;
+  const SIMULATION_SPEED = 1.35;
+  const MAX_TRAIL_POINTS = 1200;
+
+  const masses = [1.2, 0.8, 0.45];
+  const colors = ["#ff8a3d", "#4fd1ff", "#b48ead"];
+
+  const innerMass = masses[0] + masses[1];
+  const totalMass = innerMass + masses[2];
+  const innerSeparation = 1.4;
+  const outerSeparation = 5.5;
+
+  const innerCenterX = -outerSeparation * masses[2] / totalMass;
+  const thirdX = outerSeparation * innerMass / totalMass;
+  const innerOmega = Math.sqrt(G * innerMass / Math.pow(innerSeparation, 3));
+  const outerOmega = Math.sqrt(G * totalMass / Math.pow(outerSeparation, 3));
+
+  const bodies = [
+    {
+      mass: masses[0],
+      color: colors[0],
+      x: innerCenterX - innerSeparation * masses[1] / innerMass,
+      y: 0,
+      vx: 0,
+      vy: outerOmega * innerCenterX +
+          innerOmega * innerSeparation * masses[1] / innerMass,
+      ax: 0,
+      ay: 0,
+      trail: []
+    },
+    {
+      mass: masses[1],
+      color: colors[1],
+      x: innerCenterX + innerSeparation * masses[0] / innerMass,
+      y: 0,
+      vx: 0,
+      vy: outerOmega * innerCenterX -
+          innerOmega * innerSeparation * masses[0] / innerMass,
+      ax: 0,
+      ay: 0,
+      trail: []
+    },
+    {
+      mass: masses[2],
+      color: colors[2],
+      x: thirdX,
+      y: 0,
+      vx: 0,
+      vy: outerOmega * thirdX,
+      ax: 0,
+      ay: 0,
+      trail: []
+    }
+  ];
+
+  let momentumX = 0;
+  let momentumY = 0;
+
+  for (const body of bodies) {
+    momentumX += body.mass * body.vx;
+    momentumY += body.mass * body.vy;
+  }
+
+  const correctionX = momentumX / totalMass;
+  const correctionY = momentumY / totalMass;
+
+  for (const body of bodies) {
+    body.vx -= correctionX;
+    body.vy -= correctionY;
+    body.trail.push({ x: body.x, y: body.y });
+  }
+
+  function computeAccelerations() {
+    for (const body of bodies) {
+      body.ax = 0;
+      body.ay = 0;
+    }
+
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const a = bodies[i];
+        const b = bodies[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const softenedDistanceSq = dx * dx + dy * dy + SOFTENING_SQ;
+        const inverseDistanceCubed =
+          1 / Math.pow(softenedDistanceSq, 1.5);
+
+        const factorA = G * b.mass * inverseDistanceCubed;
+        const factorB = G * a.mass * inverseDistanceCubed;
+
+        a.ax += dx * factorA;
+        a.ay += dy * factorA;
+        b.ax -= dx * factorB;
+        b.ay -= dy * factorB;
+      }
+    }
+  }
+
+  function totalEnergy() {
+    let kinetic = 0;
+    let potential = 0;
+
+    for (const body of bodies) {
+      kinetic += 0.5 * body.mass *
+        (body.vx * body.vx + body.vy * body.vy);
+    }
+
+    for (let i = 0; i < bodies.length; i++) {
+      for (let j = i + 1; j < bodies.length; j++) {
+        const dx = bodies[j].x - bodies[i].x;
+        const dy = bodies[j].y - bodies[i].y;
+        const distance = Math.sqrt(dx * dx + dy * dy + SOFTENING_SQ);
+        potential -= G * bodies[i].mass * bodies[j].mass / distance;
+      }
+    }
+
+    return kinetic + potential;
+  }
+
+  function centerOfMass() {
+    let x = 0;
+    let y = 0;
+
+    for (const body of bodies) {
+      x += body.x * body.mass;
+      y += body.y * body.mass;
+    }
+
+    return {
+      x: x / totalMass,
+      y: y / totalMass
+    };
+  }
+
+  computeAccelerations();
+  const initialEnergy = totalEnergy();
+
+  function integrate(dt) {
+    const oldAccelerations = bodies.map(body => ({
+      x: body.ax,
+      y: body.ay
+    }));
+
+    const halfDtSquared = 0.5 * dt * dt;
+
+    for (let i = 0; i < bodies.length; i++) {
+      const body = bodies[i];
+      body.x += body.vx * dt + oldAccelerations[i].x * halfDtSquared;
+      body.y += body.vy * dt + oldAccelerations[i].y * halfDtSquared;
+    }
+
+    computeAccelerations();
+
+    for (let i = 0; i < bodies.length; i++) {
+      const body = bodies[i];
+      body.vx += 0.5 * (oldAccelerations[i].x + body.ax) * dt;
+      body.vy += 0.5 * (oldAccelerations[i].y + body.ay) * dt;
+    }
+  }
+
+  function recordTrails() {
+    for (const body of bodies) {
+      body.trail.push({ x: body.x, y: body.y });
+      if (body.trail.length > MAX_TRAIL_POINTS) {
+        body.trail.splice(0, body.trail.length - MAX_TRAIL_POINTS);
+      }
+    }
+  }
+
+  function screenPosition(point, center, scale) {
+    return {
+      x: width * 0.5 + (point.x - center.x) * scale,
+      y: height * 0.5 - (point.y - center.y) * scale
+    };
+  }
+
+  function drawTrail(body, center, scale) {
+    const points = body.trail;
+    if (points.length < 2) return;
+
+    ctx.strokeStyle = body.color;
+    ctx.lineWidth = 1;
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "round";
+
+    const batchSize = 16;
+    const lastIndex = points.length - 1;
+
+    for (let start = 0; start < lastIndex; start += batchSize) {
+      const end = Math.min(lastIndex, start + batchSize);
+      const fade = end / lastIndex;
+      ctx.globalAlpha = 0.3 * Math.pow(fade, 1.2);
+
+      const first = screenPosition(points[start], center, scale);
+      ctx.beginPath();
+      ctx.moveTo(first.x, first.y);
+
+      for (let i = start + 1; i <= end; i++) {
+        const point = screenPosition(points[i], center, scale);
+        ctx.lineTo(point.x, point.y);
+      }
+
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBody(body, center, scale) {
+    const position = screenPosition(body, center, scale);
+    const radius = Math.max(5, 12 * Math.cbrt(body.mass));
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = body.color;
+    ctx.beginPath();
+    ctx.arc(position.x, position.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, width, height);
+
+    const center = centerOfMass();
+    const scale = Math.min(width, height) * 0.08;
+
+    for (const body of bodies) {
+      drawTrail(body, center, scale);
+    }
+
+    for (const body of bodies) {
+      drawBody(body, center, scale);
+    }
+
+    const drift = (totalEnergy() - initialEnergy) /
+      Math.abs(initialEnergy) * 100;
+    const driftText = (drift >= 0 ? "+" : "") + drift.toFixed(4) + "%";
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#e6e6e6";
+    ctx.font = "12px monospace";
+    ctx.textBaseline = "top";
+    ctx.fillText("Total energy drift: " + driftText, 10, 10);
+  }
+
+  let previousTime = performance.now();
+  let accumulator = 0;
+
+  function frame(now) {
+    const elapsed = Math.min((now - previousTime) / 1000, 0.05);
+    previousTime = now;
+    accumulator += elapsed * SIMULATION_SPEED;
+
+    let steps = 0;
+    while (accumulator >= FIXED_DT && steps < 50) {
+      integrate(FIXED_DT);
+      accumulator -= FIXED_DT;
+      steps++;
+    }
+
+    if (steps > 0) {
+      recordTrails();
+    }
+
+    if (steps === 50) {
+      accumulator = 0;
+    }
+
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

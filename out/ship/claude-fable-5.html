@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize(){ W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// Wave parameters (sum of moving sines)
+const waves = [
+  {A: 26, k: 0.010, w: 1.1, phase: 0.0, dir: 1},
+  {A: 14, k: 0.021, w: 1.7, phase: 2.1, dir: -1},
+  {A: 8,  k: 0.037, w: 2.6, phase: 4.0, dir: 1}
+];
+let totalA = waves.reduce((s,v)=>s+v.A,0);
+
+function waveHeight(x, t){
+  let h = 0;
+  for (const v of waves) h += v.A * Math.sin(v.k * x - v.dir * v.w * t + v.phase);
+  return h;
+}
+function waveSlope(x, t){
+  let s = 0;
+  for (const v of waves) s += v.A * v.k * Math.cos(v.k * x - v.dir * v.w * t + v.phase);
+  return s;
+}
+
+// Color ramp: trough #1e3a8a, mid #4fd1ff, crest #eaf6ff
+const cTrough = [0x1e,0x3a,0x8a], cMid = [0x4f,0xd1,0xff], cCrest = [0xea,0xf6,0xff];
+function lerp(a,b,t){ return a + (b-a)*t; }
+function rampColor(u){ // u in [0,1]
+  u = Math.max(0, Math.min(1, u));
+  let c;
+  if (u < 0.5){
+    const t = u/0.5;
+    c = [lerp(cTrough[0],cMid[0],t), lerp(cTrough[1],cMid[1],t), lerp(cTrough[2],cMid[2],t)];
+  } else {
+    const t = (u-0.5)/0.5;
+    c = [lerp(cMid[0],cCrest[0],t), lerp(cMid[1],cCrest[1],t), lerp(cMid[2],cCrest[2],t)];
+  }
+  return 'rgb(' + (c[0]|0) + ',' + (c[1]|0) + ',' + (c[2]|0) + ')';
+}
+
+// Ocean particle grid: ~600 particles (120 columns x 5 rows)
+const COLS = 120, ROWS = 5;
+
+// Ship particle cluster (local coordinates, y up negative)
+// Hull: curved rows of particles; mast: vertical column
+const shipPts = [];
+(function buildShip(){
+  // Hull bottom row (narrow)
+  for (let i = -2; i <= 2; i++) shipPts.push({x: i*8, y: 10});
+  // Hull mid row
+  for (let i = -3; i <= 3; i++) shipPts.push({x: i*8, y: 2});
+  // Hull top row (widest, deck)
+  for (let i = -4; i <= 4; i++) shipPts.push({x: i*8, y: -6});
+  // Mast
+  for (let j = 1; j <= 7; j++) shipPts.push({x: 0, y: -6 - j*8});
+  // Small flag/cross beam
+  shipPts.push({x: 8, y: -46});
+  shipPts.push({x: 16, y: -46});
+})();
+
+// Ship state (smoothed for stability)
+let shipY = 0, shipTilt = 0, initialized = false;
+
+let t0 = performance.now();
+
+function frame(now){
+  const t = (now - t0) / 1000;
+
+  // background
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  const baseY = H * 0.60;
+  const rowGap = Math.max(10, (H - baseY - 20) / ROWS);
+
+  // Ocean particles
+  for (let c = 0; c < COLS; c++){
+    const x = (c + 0.5) * (W / COLS);
+    const h = waveHeight(x, t);
+    const surfY = baseY + h; // note: positive h -> lower; invert for crest up
+    const yTop = baseY - h;
+    // normalized height for color: crest -> 1, trough -> 0
+    const u = (h / totalA) * 0.5 + 0.5;
+    for (let r = 0; r < ROWS; r++){
+      // deeper rows: attenuated wave, darker toward trough color
+      const depthFrac = r / ROWS;
+      const yy = yTop + r * rowGap + h * 0.15 * r;
+      const uu = u * (1 - depthFrac * 0.75);
+      ctx.fillStyle = rampColor(uu);
+      ctx.beginPath();
+      ctx.arc(x, yy, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Ship buoyancy: sample wave under ship center, follow height and slope
+  const shipX = W * 0.5;
+  const hC = waveHeight(shipX, t);
+  const slope = -waveSlope(shipX, t); // screen y grows downward; crest up = -h
+  const targetY = baseY - hC - 6;     // sit slightly above surface line
+  const targetTilt = Math.atan(slope * 0.8);
+
+  if (!initialized){ shipY = targetY; shipTilt = targetTilt; initialized = true; }
+  shipY += (targetY - shipY) * 0.12;
+  shipTilt += (targetTilt - shipTilt) * 0.10;
+  // clamp for stability
+  shipTilt = Math.max(-0.6, Math.min(0.6, shipTilt));
+  shipY = Math.max(baseY - totalA - 60, Math.min(baseY + totalA + 60, shipY));
+
+  // Draw ship as particle cluster
+  const cosT = Math.cos(shipTilt), sinT = Math.sin(shipTilt);
+  ctx.fillStyle = '#ff8a3d';
+  for (const p of shipPts){
+    const rx = p.x * cosT - p.y * sinT;
+    const ry = p.x * sinT + p.y * cosT;
+    ctx.beginPath();
+    ctx.arc(shipX + rx, shipY + ry, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

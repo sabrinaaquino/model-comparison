@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 0, H = 0;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Hexagon
+  var hexAngle = 0;
+  var OMEGA = 0.7; // rad/s constant spin
+  function hexRadius() { return Math.min(W, H) * 0.38; }
+  function hexCenter() { return { x: W / 2, y: H / 2 }; }
+
+  function hexVertices() {
+    var c = hexCenter(), R = hexRadius();
+    var v = [];
+    for (var i = 0; i < 6; i++) {
+      var a = hexAngle + i * Math.PI / 3;
+      v.push({ x: c.x + R * Math.cos(a), y: c.y + R * Math.sin(a) });
+    }
+    return v;
+  }
+
+  // Ball
+  var BALL_R = 12;
+  var ball = { x: W / 2, y: H / 2 - hexRadius() * 0.4, vx: 180, vy: 0 };
+  var GRAVITY = 900;
+  var RESTITUTION = 0.86;
+  var WALL_FRICTION = 0.94; // tangential velocity retained on bounce
+  var AIR_DRAG = 0.08;      // per second linear drag
+
+  var bounces = 0;
+
+  // Trail
+  var trail = [];
+  var TRAIL_MAX = 120;
+
+  function wallVelocity(px, py) {
+    var c = hexCenter();
+    var rx = px - c.x, ry = py - c.y;
+    return { x: -OMEGA * ry, y: OMEGA * rx };
+  }
+
+  function collide() {
+    var verts = hexVertices();
+    var c = hexCenter();
+    for (var i = 0; i < 6; i++) {
+      var a = verts[i], b = verts[(i + 1) % 6];
+      var ex = b.x - a.x, ey = b.y - a.y;
+      var len2 = ex * ex + ey * ey;
+      var t = ((ball.x - a.x) * ex + (ball.y - a.y) * ey) / len2;
+      t = Math.max(0, Math.min(1, t));
+      var cx = a.x + t * ex, cy = a.y + t * ey;
+      var dx = ball.x - cx, dy = ball.y - cy;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+
+      // Inward normal (pointing toward hexagon center)
+      var nx, ny;
+      if (dist > 1e-9) {
+        nx = dx / dist; ny = dy / dist;
+        // ensure normal points inward (toward center side)
+        var toC = (c.x - cx) * nx + (c.y - cy) * ny;
+        if (toC < 0) { nx = -nx; ny = -ny; dist = -dist; }
+      } else {
+        var elen = Math.sqrt(len2);
+        nx = -ey / elen; ny = ex / elen;
+        var toC2 = (c.x - cx) * nx + (c.y - cy) * ny;
+        if (toC2 < 0) { nx = -nx; ny = -ny; }
+        dist = 0;
+      }
+
+      if (dist < BALL_R) {
+        // push out along inward normal
+        var pen = BALL_R - dist;
+        ball.x += nx * pen;
+        ball.y += ny * pen;
+
+        var wv = wallVelocity(cx, cy);
+        var rvx = ball.vx - wv.x, rvy = ball.vy - wv.y;
+        var vn = rvx * nx + rvy * ny;
+        if (vn < 0) {
+          // decompose
+          var vtx = rvx - vn * nx, vty = rvy - vn * ny;
+          var newVn = -vn * RESTITUTION;
+          vtx *= WALL_FRICTION;
+          vty *= WALL_FRICTION;
+          ball.vx = wv.x + nx * newVn + vtx;
+          ball.vy = wv.y + ny * newVn + vty;
+          bounces++;
+        }
+      }
+    }
+
+    // Hard safety clamp: keep ball strictly inside all edge half-planes
+    var verts2 = hexVertices();
+    for (var j = 0; j < 6; j++) {
+      var p = verts2[j], q = verts2[(j + 1) % 6];
+      var ex2 = q.x - p.x, ey2 = q.y - p.y;
+      var elen2 = Math.sqrt(ex2 * ex2 + ey2 * ey2);
+      var nx2 = -ey2 / elen2, ny2 = ex2 / elen2;
+      var toC3 = (c.x - p.x) * nx2 + (c.y - p.y) * ny2;
+      if (toC3 < 0) { nx2 = -nx2; ny2 = -ny2; }
+      var d = (ball.x - p.x) * nx2 + (ball.y - p.y) * ny2;
+      if (d < BALL_R) {
+        ball.x += nx2 * (BALL_R - d);
+        ball.y += ny2 * (BALL_R - d);
+      }
+    }
+  }
+
+  function step(dt) {
+    hexAngle += OMEGA * dt;
+
+    ball.vy += GRAVITY * dt;
+    var drag = Math.max(0, 1 - AIR_DRAG * dt);
+    ball.vx *= drag;
+    ball.vy *= drag;
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    collide();
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, W, H);
+
+    // Hexagon
+    var v = hexVertices();
+    ctx.strokeStyle = '#e6e6e6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(v[0].x, v[0].y);
+    for (var i = 1; i < 6; i++) ctx.lineTo(v[i].x, v[i].y);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Trail
+    if (trail.length > 1) {
+      ctx.strokeStyle = 'rgba(255,138,61,0.3)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(trail[0].x, trail[0].y);
+      for (var t = 1; t < trail.length; t++) ctx.lineTo(trail[t].x, trail[t].y);
+      ctx.stroke();
+    }
+
+    // Ball
+    ctx.fillStyle = '#ff8a3d';
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Text
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    var speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+    ctx.fillText('bounces: ' + bounces, 10, 10);
+    ctx.fillText('speed: ' + speed.toFixed(1) + ' px/s', 10, 26);
+  }
+
+  var last = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    // substeps for stability
+    var sub = 4;
+    for (var i = 0; i < sub; i++) step(dt / sub);
+
+    trail.push({ x: ball.x, y: ball.y });
+    if (trail.length > TRAIL_MAX) trail.shift();
+
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

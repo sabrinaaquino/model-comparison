@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+"use strict";
+var canvas=document.getElementById('c');
+var ctx=canvas.getContext('2d');
+var W=0,H=0;
+var left=0,right=0,top=0,bottom=0;
+
+// SPH (Clavet double-density relaxation) parameters
+var N=1000;
+var h=16, h2=h*h;
+var restDensity=3.5;
+var k=4000;
+var kNear=20000;
+var sigma=15, beta=0.3;
+var gravY=1000;
+var rockAmp=350, rockOmega=0.9;
+var SUB=2;
+var DT=1/60;
+var vmax=800;
+var maxD=3;
+
+var px=new Float32Array(N), py=new Float32Array(N);
+var vx=new Float32Array(N), vy=new Float32Array(N);
+var ppx=new Float32Array(N), ppy=new Float32Array(N);
+var dens=new Float32Array(N), ndens=new Float32Array(N);
+var nxt=new Int32Array(N);
+var head=null, gw=0, gh=0;
+
+function resize(){
+  W=window.innerWidth; H=window.innerHeight;
+  canvas.width=W; canvas.height=H;
+  left=Math.round(W*0.06); right=Math.round(W*0.94);
+  top=Math.round(H*0.07); bottom=Math.round(H*0.93);
+  gw=Math.max(1,Math.ceil((right-left)/h)+1);
+  gh=Math.max(1,Math.ceil((bottom-top)/h)+1);
+  head=new Int32Array(gw*gh);
+  // keep particles inside
+  for(var i=0;i<N;i++){
+    if(px[i]<left+3)px[i]=left+3;
+    if(px[i]>right-3)px[i]=right-3;
+    if(py[i]<top+3)py[i]=top+3;
+    if(py[i]>bottom-3)py[i]=bottom-3;
+  }
+}
+window.addEventListener('resize',resize);
+resize();
+
+// spawn: a block of water sitting near the bottom
+(function spawn(){
+  var s=6;
+  var cw=right-left-8, ch=bottom-top-8;
+  var rows=Math.max(1,Math.floor((ch*0.45)/s));
+  var cols=Math.ceil(N/rows);
+  if(cols*s>cw){ cols=Math.floor(cw/s); rows=Math.ceil(N/cols); }
+  var x0=left+4+(cw-cols*s)/2;
+  var n=0;
+  for(var r=0;r<rows&&n<N;r++){
+    for(var c=0;c<cols&&n<N;c++){
+      px[n]=x0+c*s+(Math.random()-0.5)*0.5;
+      py[n]=bottom-4-r*s+(Math.random()-0.5)*0.5;
+      vx[n]=0; vy[n]=0;
+      n++;
+    }
+  }
+  N=n;
+})();
+
+function buildGrid(){
+  head.fill(-1);
+  var invh=1/h;
+  for(var i=0;i<N;i++){
+    var cx=((px[i]-left)*invh)|0;
+    var cy=((py[i]-top)*invh)|0;
+    if(cx<0)cx=0; if(cx>=gw)cx=gw-1;
+    if(cy<0)cy=0; if(cy>=gh)cy=gh-1;
+    var cell=cy*gw+cx;
+    nxt[i]=head[cell];
+    head[cell]=i;
+  }
+}
+
+function step(dt,gx,gy){
+  var i,j,cx,cy,dxc,dyc,cell,rx,ry,r2,r,q;
+  var invh=1/h;
+
+  // gravity
+  for(i=0;i<N;i++){ vx[i]+=gx*dt; vy[i]+=gy*dt; }
+
+  // viscosity (pairwise, current positions)
+  buildGrid();
+  for(i=0;i<N;i++){
+    cx=((px[i]-left)*invh)|0; cy=((py[i]-top)*invh)|0;
+    if(cx<0)cx=0; if(cx>=gw)cx=gw-1;
+    if(cy<0)cy=0; if(cy>=gh)cy=gh-1;
+    for(dyc=-1;dyc<=1;dyc++){
+      var yy=cy+dyc; if(yy<0||yy>=gh)continue;
+      for(dxc=-1;dxc<=1;dxc++){
+        var xx=cx+dxc; if(xx<0||xx>=gw)continue;
+        j=head[yy*gw+xx];
+        while(j>=0){
+          if(j>i){
+            rx=px[j]-px[i]; ry=py[j]-py[i];
+            r2=rx*rx+ry*ry;
+            if(r2<h2&&r2>1e-9){
+              r=Math.sqrt(r2);
+              var nxr=rx/r, nyr=ry/r;
+              var u=(vx[i]-vx[j])*nxr+(vy[i]-vy[j])*nyr;
+              if(u>0){
+                q=1-r/h;
+                var I=dt*q*(sigma*u+beta*u*u);
+                if(I>u)I=u;
+                var ix=0.5*I*nxr, iy=0.5*I*nyr;
+                vx[i]-=ix; vy[i]-=iy;
+                vx[j]+=ix; vy[j]+=iy;
+              }
+            }
+          }
+          j=nxt[j];
+        }
+      }
+    }
+  }
+
+  // clamp velocity + advect
+  for(i=0;i<N;i++){
+    var sp=vx[i]*vx[i]+vy[i]*vy[i];
+    if(sp>vmax*vmax){ sp=vmax/Math.sqrt(sp); vx[i]*=sp; vy[i]*=sp; }
+    ppx[i]=px[i]; ppy[i]=py[i];
+    px[i]+=vx[i]*dt; py[i]+=vy[i]*dt;
+  }
+
+  // densities on new positions
+  buildGrid();
+  for(i=0;i<N;i++){
+    var d=0,dn=0;
+    cx=((px[i]-left)*invh)|0; cy=((py[i]-top)*invh)|0;
+    if(cx<0)cx=0; if(cx>=gw)cx=gw-1;
+    if(cy<0)cy=0; if(cy>=gh)cy=gh-1;
+    for(dyc=-1;dyc<=1;dyc++){
+      var yy=cy+dyc; if(yy<0||yy>=gh)continue;
+      for(dxc=-1;dxc<=1;dxc++){
+        var xx=cx+dxc; if(xx<0||xx>=gw)continue;
+        j=head[yy*gw+xx];
+        while(j>=0){
+          if(j!==i){
+            rx=px[j]-px[i]; ry=py[j]-py[i];
+            r2=rx*rx+ry*ry;
+            if(r2<h2){
+              r=Math.sqrt(r2);
+              q=1-r/h;
+              d+=q*q; dn+=q*q*q;
+            }
+          }
+          j=nxt[j];
+        }
+      }
+    }
+    dens[i]=d; ndens[i]=dn;
+  }
+
+  // double density relaxation
+  var dt2=dt*dt;
+  for(i=0;i<N;i++){
+    var P=dt2*k*(dens[i]-restDensity);
+    var Pn=dt2*kNear*ndens[i];
+    var accx=0,accy=0;
+    cx=((px[i]-left)*invh)|0; cy=((py[i]-top)*invh)|0;
+    if(cx<0)cx=0; if(cx>=gw)cx=gw-1;
+    if(cy<0)cy=0; if(cy>=gh)cy=gh-1;
+    for(dyc=-1;dyc<=1;dyc++){
+      var yy=cy+dyc; if(yy<0||yy>=gh)continue;
+      for(dxc=-1;dxc<=1;dxc++){
+        var xx=cx+dxc; if(xx<0||xx>=gw)continue;
+        j=head[yy*gw+xx];
+        while(j>=0){
+          if(j!==i){
+            rx=px[j]-px[i]; ry=py[j]-py[i];
+            r2=rx*rx+ry*ry;
+            if(r2<h2&&r2>1e-9){
+              r=Math.sqrt(r2);
+              q=1-r/h;
+              var D=P*q+Pn*q*q;
+              if(D>maxD)D=maxD; else if(D<-maxD)D=-maxD;
+              var Dx=0.5*D*rx/r, Dy=0.5*D*ry/r;
+              px[j]+=Dx; py[j]+=Dy;
+              accx-=Dx; accy-=Dy;
+            }
+          }
+          j=nxt[j];
+        }
+      }
+    }
+    px[i]+=accx; py[i]+=accy;
+  }
+
+  // walls + derive velocities
+  var invdt=1/dt;
+  for(i=0;i<N;i++){
+    if(!isFinite(px[i])||!isFinite(py[i])){
+      px[i]=(left+right)/2; py[i]=(top+bottom)/2; ppx[i]=px[i]; ppy[i]=py[i];
+    }
+    if(px[i]<left+3)px[i]=left+3;
+    if(px[i]>right-3)px[i]=right-3;
+    if(py[i]<top+3)py[i]=top+3;
+    if(py[i]>bottom-3)py[i]=bottom-3;
+    vx[i]=(px[i]-ppx[i])*invdt;
+    vy[i]=(py[i]-ppy[i])*invdt;
+    var sp=vx[i]*vx[i]+vy[i]*vy[i];
+    if(sp>vmax*vmax){ sp=vmax/Math.sqrt(sp); vx[i]*=sp; vy[i]*=sp; }
+  }
+}
+
+// exact color ramp, precomputed palette
+var PAL=[];
+(function(){
+  var c0=[0x3b,0x82,0xf6], c1=[0x4f,0xd1,0xff], c2=[0xea,0xf6,0xff];
+  for(var i=0;i<=64;i++){
+    var t=i/64, a,b,f;
+    if(t<0.5){ a=c0;b=c1;f=t*2; } else { a=c1;b=c2;f=(t-0.5)*2; }
+    var r=Math.round(a[0]+(b[0]-a[0])*f);
+    var g=Math.round(a[1]+(b[1]-a[1])*f);
+    var bl=Math.round(a[2]+(b[2]-a[2])*f);
+    PAL.push('rgb('+r+','+g+','+bl+')');
+  }
+})();
+var speedRef=500;
+
+var time=0, fps=60, lastT=performance.now();
+function frame(now){
+  var elapsed=(now-lastT)/1000; lastT=now;
+  if(elapsed>0) fps+= (1/Math.max(elapsed,1e-4)-fps)*0.05;
+
+  var dt=DT/SUB;
+  for(var s=0;s<SUB;s++){
+    time+=dt;
+    var gx=rockAmp*Math.sin(rockOmega*time);
+    step(dt,gx,gravY);
+  }
+
+  // render
+  ctx.fillStyle='#0b0b0d';
+  ctx.fillRect(0,0,W,H);
+
+  // container walls
+  ctx.strokeStyle='#e6e6e6';
+  ctx.lineWidth=2;
+  ctx.strokeRect(left,top,right-left,bottom-top);
+
+  // particles
+  var TWO=Math.PI*2;
+  for(var i=0;i<N;i++){
+    var sp=Math.sqrt(vx[i]*vx[i]+vy[i]*vy[i]);
+    var t=sp/speedRef; if(t>1)t=1;
+    ctx.fillStyle=PAL[(t*64)|0];
+    ctx.beginPath();
+    ctx.arc(px[i],py[i],3,0,TWO);
+    ctx.fill();
+  }
+
+  // text
+  ctx.fillStyle='#e6e6e6';
+  ctx.font='12px monospace';
+  ctx.textBaseline='top';
+  ctx.fillText('particles: '+N+'  fps: '+Math.round(fps),10,10);
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

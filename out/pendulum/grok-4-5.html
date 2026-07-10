@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas=document.getElementById("c");
+const ctx=canvas.getContext("2d");
+let W,H,cx,cy,scale;
+const trail=[];
+const MAX_TRAIL=400;
+const m1=1,m2=1,L1=1,L2=1,g=9.81;
+let state=[Math.PI*0.75,0,Math.PI*0.75+0.15,0];
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+  cx=W*0.5;
+  cy=H*0.28;
+  scale=Math.min(W,H)*0.22;
+  trail.length=0;
+}
+window.addEventListener("resize",resize);
+resize();
+function derivs(s){
+  const th1=s[0],w1=s[1],th2=s[2],w2=s[3];
+  const d=th1-th2;
+  const den=2*m1+m2-m2*Math.cos(2*d);
+  const a1=(-g*(2*m1+m2)*Math.sin(th1)-m2*g*Math.sin(th1-2*th2)-2*Math.sin(d)*m2*(w2*w2*L2+w1*w1*L1*Math.cos(d)))/(L1*den);
+  const a2=(2*Math.sin(d)*(w1*w1*L1*(m1+m2)+g*(m1+m2)*Math.cos(th1)+w2*w2*L2*m2*Math.cos(d)))/(L2*den);
+  return [w1,a1,w2,a2];
+}
+function rk4(s,dt){
+  const k1=derivs(s);
+  const s2=[s[0]+0.5*dt*k1[0],s[1]+0.5*dt*k1[1],s[2]+0.5*dt*k1[2],s[3]+0.5*dt*k1[3]];
+  const k2=derivs(s2);
+  const s3=[s[0]+0.5*dt*k2[0],s[1]+0.5*dt*k2[1],s[2]+0.5*dt*k2[2],s[3]+0.5*dt*k2[3]];
+  const k3=derivs(s3);
+  const s4=[s[0]+dt*k3[0],s[1]+dt*k3[1],s[2]+dt*k3[2],s[3]+dt*k3[3]];
+  const k4=derivs(s4);
+  return [
+    s[0]+(dt/6)*(k1[0]+2*k2[0]+2*k3[0]+k4[0]),
+    s[1]+(dt/6)*(k1[1]+2*k2[1]+2*k3[1]+k4[1]),
+    s[2]+(dt/6)*(k1[2]+2*k2[2]+2*k3[2]+k4[2]),
+    s[3]+(dt/6)*(k1[3]+2*k2[3]+2*k3[3]+k4[3])
+  ];
+}
+function energy(s){
+  const th1=s[0],w1=s[1],th2=s[2],w2=s[3];
+  const v1sq=L1*L1*w1*w1;
+  const v2sq=L1*L1*w1*w1+L2*L2*w2*w2+2*L1*L2*w1*w2*Math.cos(th1-th2);
+  const KE=0.5*m1*v1sq+0.5*m2*v2sq;
+  const PE=-(m1+m2)*g*L1*Math.cos(th1)-m2*g*L2*Math.cos(th2);
+  return KE+PE;
+}
+let last=performance.now();
+function frame(now){
+  let dt=Math.min((now-last)/1000,0.05);
+  last=now;
+  const steps=10;
+  const h=dt/steps;
+  for(let i=0;i<steps;i++) state=rk4(state,h);
+  const th1=state[0],th2=state[2];
+  const x1=cx+scale*L1*Math.sin(th1);
+  const y1=cy+scale*L1*Math.cos(th1);
+  const x2=x1+scale*L2*Math.sin(th2);
+  const y2=y1+scale*L2*Math.cos(th2);
+  trail.push([x2,y2]);
+  if(trail.length>MAX_TRAIL) trail.shift();
+  ctx.fillStyle="#0b0b0d";
+  ctx.fillRect(0,0,W,H);
+  if(trail.length>1){
+    ctx.strokeStyle="rgba(255,138,61,0.3)";
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(trail[0][0],trail[0][1]);
+    for(let i=1;i<trail.length;i++) ctx.lineTo(trail[i][0],trail[i][1]);
+    ctx.stroke();
+  }
+  ctx.strokeStyle="#e6e6e6";
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.lineTo(x1,y1);
+  ctx.lineTo(x2,y2);
+  ctx.stroke();
+  ctx.fillStyle="#ff8a3d";
+  ctx.beginPath();
+  ctx.arc(x1,y1,12,0,Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x2,y2,12,0,Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle="#e6e6e6";
+  ctx.font="12px monospace";
+  ctx.textBaseline="top";
+  ctx.fillText("E "+energy(state).toFixed(4),10,10);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

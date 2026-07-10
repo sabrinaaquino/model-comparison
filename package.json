@@ -1,0 +1,19 @@
+{
+  "name": "model-comparison",
+  "version": "1.0.0",
+  "description": "Same prompt, four frontier models, side by side — a physics coding showdown (8 events) rendered in a 2x2 grid, generated via the Venice API.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "generate": "node run-showdown.mjs"
+  },
+  "keywords": [
+    "llm",
+    "benchmark",
+    "venice",
+    "physics",
+    "model-comparison"
+  ],
+  "author": "Sabrina Aquino",
+  "license": "MIT"
+}

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Particle Fountain</title>
+<style>
+*{margin:0;padding:0;overflow:hidden}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W,H;
+const PARTICLE_COUNT=1000;
+const RADIUS=2;
+const TRAIL_LEN=10;
+const GRAVITY=0.18;
+const DRAG=0.995;
+const BOUNCE=0.55;
+const particles=[];
+let lastTime=performance.now();
+let fps=60;
+let frameCount=0;
+let fpsAccum=0;
+
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+}
+window.addEventListener('resize',resize);
+resize();
+
+function lerp(a,b,t){return a+(b-a)*t;}
+function clamp(v,a,b){return v<a?a:v>b?b:v;}
+
+function speedToColor(speed,alpha){
+  const sSlow=3;
+  const sMed=10;
+  const sFast=18;
+  let r,g,b;
+  if(speed<=sSlow){
+    const t=speed/sSlow;
+    r=lerp(0x3b,0xe6,t);
+    g=lerp(0x82,0xe6,t);
+    b=lerp(0xf6,0xe6,t);
+  }else if(speed<=sMed){
+    const t=(speed-sSlow)/(sMed-sSlow);
+    r=lerp(0xe6,0xff,t);
+    g=lerp(0xe6,0xd2,t);
+    b=lerp(0xe6,0x3d,t);
+  }else{
+    const t=clamp((speed-sMed)/(sFast-sMed),0,1);
+    r=lerp(0xff,0xff,t);
+    g=lerp(0xd2,0xd2,t);
+    b=lerp(0x3d,0x3d,t);
+  }
+  if(alpha===undefined||alpha>=1)return`rgb(${r|0},${g|0},${b|0})`;
+  return`rgba(${r|0},${g|0},${b|0},${alpha})`;
+}
+
+function resetParticle(p,burst){
+  p.x=W*0.5+(Math.random()-0.5)*8;
+  p.y=H-4;
+  const spread=0.95;
+  const angle=-Math.PI*0.5+(Math.random()-0.5)*spread;
+  const spd=9+Math.random()*7;
+  p.vx=Math.cos(angle)*spd+(Math.random()-0.5)*0.6;
+  p.vy=Math.sin(angle)*spd;
+  p.maxLife=90+Math.random()*100;
+  p.life=burst?p.maxLife*Math.random():p.maxLife;
+  p.trail=[];
+  for(let i=0;i<TRAIL_LEN;i++)p.trail.push({x:p.x,y:p.y});
+}
+
+for(let i=0;i<PARTICLE_COUNT;i++){
+  const p={x:0,y:0,vx:0,vy:0,life:0,maxLife:1,trail:[]};
+  resetParticle(p,true);
+  particles.push(p);
+}
+
+function update(dt){
+  const floorY=H-2;
+  for(let i=0;i<PARTICLE_COUNT;i++){
+    const p=particles[i];
+    p.vy+=GRAVITY*dt;
+    p.vx*=Math.pow(DRAG,dt);
+    p.vy*=Math.pow(DRAG,dt);
+    p.x+=p.vx*dt;
+    p.y+=p.vy*dt;
+    if(p.y+RADIUS>=floorY){
+      p.y=floorY-RADIUS;
+      p.vy=-Math.abs(p.vy)*BOUNCE;
+      p.vx*=0.85;
+      if(Math.abs(p.vy)<0.4)p.vy=0;
+    }
+    if(p.x<RADIUS){p.x=RADIUS;p.vx=-p.vx*0.4;}
+    if(p.x>W-RADIUS){p.x=W-RADIUS;p.vx=-p.vx*0.4;}
+    p.life-=dt;
+    if(p.life<=0)resetParticle(p,false);
+    p.trail.push({x:p.x,y:p.y});
+    if(p.trail.length>TRAIL_LEN)p.trail.shift();
+  }
+}
+
+function draw(){
+  ctx.fillStyle='#0b0b0d';
+  ctx.fillRect(0,0,W,H);
+
+  ctx.strokeStyle='#e6e6e6';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(0,H-1);
+  ctx.lineTo(W,H-1);
+  ctx.stroke();
+
+  for(let i=0;i<PARTICLE_COUNT;i++){
+    const p=particles[i];
+    const spd=Math.sqrt(p.vx*p.vx+p.vy*p.vy);
+    const lifeFade=p.life<25?p.life/25:1;
+    const trail=p.trail;
+    if(trail.length>1){
+      ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.moveTo(trail[0].x,trail[0].y);
+      for(let t=1;t<trail.length;t++)ctx.lineTo(trail[t].x,trail[t].y);
+      ctx.strokeStyle=speedToColor(spd,0.3*lifeFade);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,RADIUS,0,Math.PI*2);
+    ctx.fillStyle=speedToColor(spd,lifeFade);
+    ctx.fill();
+  }
+
+  ctx.fillStyle='#e6e6e6';
+  ctx.font='12px monospace';
+  ctx.textAlign='left';
+  ctx.textBaseline='top';
+  ctx.fillText('FPS: '+fps,10,10);
+}
+
+function frame(now){
+  const rawDt=(now-lastTime)/16.6667;
+  lastTime=now;
+  const dt=Math.min(rawDt,3);
+  frameCount++;
+  fpsAccum+=rawDt*16.6667;
+  if(fpsAccum>=500){
+    fps=Math.round(frameCount*1000/fpsAccum);
+    frameCount=0;
+    fpsAccum=0;
+  }
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

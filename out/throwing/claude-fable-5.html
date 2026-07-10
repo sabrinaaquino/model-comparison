@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+  var canvas=document.getElementById('c');
+  var ctx=canvas.getContext('2d');
+  var W=0,H=0;
+  function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
+  window.addEventListener('resize',resize);
+  resize();
+
+  var R=7;
+  var MAX=120;
+  var GRAV=900;
+  var REST_WALL=0.45;
+  var REST_BALL=0.25;
+  var FLOOR_FRICTION=0.85;
+
+  var balls=[];
+  var oldestIdx=0;
+
+  function floorY(){return H-2;}
+  function leftX(){return 2;}
+  function rightX(){return W-2;}
+
+  function launcherPos(){return {x:40,y:floorY()-20};}
+
+  function spawn(){
+    var lp=launcherPos();
+    var ang=(30+Math.random()*55)*Math.PI/180; // from horizontal, up-right
+    var spd=380+Math.random()*320;
+    var b;
+    if(balls.length<MAX){
+      b={x:lp.x,y:lp.y,vx:0,vy:0};
+      balls.push(b);
+    }else{
+      b=balls[oldestIdx];
+      oldestIdx=(oldestIdx+1)%MAX;
+    }
+    b.x=lp.x;b.y=lp.y;
+    b.vx=Math.cos(ang)*spd;
+    b.vy=-Math.sin(ang)*spd;
+  }
+
+  var launchTimer=0;
+  var LAUNCH_INTERVAL=0.22;
+
+  function physStep(dt){
+    var i,j,n=balls.length;
+    // integrate
+    for(i=0;i<n;i++){
+      var b=balls[i];
+      b.vy+=GRAV*dt;
+      b.x+=b.vx*dt;
+      b.y+=b.vy*dt;
+    }
+    // ball-ball collisions, a few iterations
+    var iter;
+    for(iter=0;iter<4;iter++){
+      for(i=0;i<n;i++){
+        var a=balls[i];
+        for(j=i+1;j<n;j++){
+          var c=balls[j];
+          var dx=c.x-a.x, dy=c.y-a.y;
+          var d2=dx*dx+dy*dy;
+          var minD=R*2;
+          if(d2<minD*minD&&d2>0.000001){
+            var d=Math.sqrt(d2);
+            var nx=dx/d, ny=dy/d;
+            var overlap=minD-d;
+            var corr=overlap*0.5;
+            a.x-=nx*corr; a.y-=ny*corr;
+            c.x+=nx*corr; c.y+=ny*corr;
+            var rvx=c.vx-a.vx, rvy=c.vy-a.vy;
+            var vn=rvx*nx+rvy*ny;
+            if(vn<0){
+              var jimp=-(1+REST_BALL)*vn*0.5;
+              a.vx-=nx*jimp; a.vy-=ny*jimp;
+              c.vx+=nx*jimp; c.vy+=ny*jimp;
+            }
+          }else if(d2<=0.000001){
+            a.x-=0.1; c.x+=0.1;
+          }
+        }
+      }
+      // boundaries inside iterations for stability
+      var fy=floorY(), lx=leftX(), rx=rightX();
+      for(i=0;i<n;i++){
+        var b2=balls[i];
+        if(b2.y+R>fy){
+          b2.y=fy-R;
+          if(b2.vy>0){
+            b2.vy=-b2.vy*REST_WALL;
+            if(Math.abs(b2.vy)<20)b2.vy=0;
+            b2.vx*=FLOOR_FRICTION;
+          }
+        }
+        if(b2.x-R<lx){
+          b2.x=lx+R;
+          if(b2.vx<0)b2.vx=-b2.vx*REST_WALL;
+        }
+        if(b2.x+R>rx){
+          b2.x=rx-R;
+          if(b2.vx>0)b2.vx=-b2.vx*REST_WALL;
+        }
+        if(b2.y-R<2){
+          b2.y=2+R;
+          if(b2.vy<0)b2.vy=-b2.vy*REST_WALL;
+        }
+      }
+    }
+    // velocity clamp for safety
+    var VMAX=1500;
+    for(i=0;i<n;i++){
+      var v=balls[i];
+      if(v.vx>VMAX)v.vx=VMAX; if(v.vx<-VMAX)v.vx=-VMAX;
+      if(v.vy>VMAX)v.vy=VMAX; if(v.vy<-VMAX)v.vy=-VMAX;
+    }
+  }
+
+  var last=performance.now();
+  function frame(now){
+    var dt=(now-last)/1000;
+    last=now;
+    if(dt>0.05)dt=0.05;
+
+    launchTimer+=dt;
+    while(launchTimer>=LAUNCH_INTERVAL){
+      launchTimer-=LAUNCH_INTERVAL;
+      spawn();
+    }
+
+    // substeps
+    var sub=3;
+    var sdt=dt/sub;
+    for(var s=0;s<sub;s++)physStep(sdt);
+
+    // render
+    ctx.fillStyle='#0b0b0d';
+    ctx.fillRect(0,0,W,H);
+
+    // walls & floor
+    ctx.strokeStyle='#e6e6e6';
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(leftX(),0);
+    ctx.lineTo(leftX(),floorY());
+    ctx.lineTo(rightX(),floorY());
+    ctx.lineTo(rightX(),0);
+    ctx.stroke();
+
+    // launcher (small structural mark)
+    var lp=launcherPos();
+    ctx.beginPath();
+    ctx.moveTo(lp.x-12,floorY());
+    ctx.lineTo(lp.x,lp.y);
+    ctx.lineTo(lp.x+12,floorY());
+    ctx.stroke();
+
+    // balls
+    ctx.fillStyle='#ff8a3d';
+    for(var i=0;i<balls.length;i++){
+      var b=balls[i];
+      ctx.beginPath();
+      ctx.arc(b.x,b.y,R,0,Math.PI*2);
+      ctx.fill();
+    }
+
+    // text
+    ctx.fillStyle='#e6e6e6';
+    ctx.font='12px monospace';
+    ctx.textBaseline='top';
+    ctx.fillText('objects: '+balls.length,10,10);
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

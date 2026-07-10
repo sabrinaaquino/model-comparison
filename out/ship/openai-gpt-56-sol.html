@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  let width = 1;
+  let height = 1;
+  let dpr = 1;
+  let oceanColumns = 50;
+  let oceanRows = 12;
+  let elapsed = 0;
+  let previousTime = 0;
+
+  const shipPoints = [];
+  const boat = {
+    x: 0,
+    y: 0,
+    vy: 0,
+    angle: 0,
+    angularVelocity: 0,
+    initialized: false
+  };
+
+  const troughColor = [30, 58, 138];
+  const midColor = [79, 209, 255];
+  const crestColor = [234, 246, 255];
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function hash(value) {
+    const x = Math.sin(value * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function makeShip() {
+    shipPoints.length = 0;
+
+    const hullRows = [
+      [-5, 58],
+      [1, 54],
+      [7, 48],
+      [13, 40],
+      [19, 31],
+      [25, 19],
+      [31, 7]
+    ];
+
+    for (let row = 0; row < hullRows.length; row++) {
+      const y = hullRows[row][0];
+      const halfWidth = hullRows[row][1];
+      const count = Math.max(1, Math.floor((halfWidth * 2) / 7) + 1);
+
+      for (let i = 0; i < count; i++) {
+        const x = count === 1
+          ? 0
+          : -halfWidth + (i / (count - 1)) * halfWidth * 2;
+        shipPoints.push({ x, y });
+      }
+    }
+
+    for (let y = -12; y >= -75; y -= 7) {
+      shipPoints.push({ x: 0, y });
+    }
+  }
+
+  function oceanBase() {
+    return height * 0.62;
+  }
+
+  function waveAmplitude() {
+    return clamp(height * 0.035, 14, 34);
+  }
+
+  function waveHeight(x, time) {
+    const amplitude = waveAmplitude();
+
+    return amplitude * (
+      0.52 * Math.sin(x * 0.0084 - time * 0.78) +
+      0.30 * Math.sin(x * 0.0147 - time * 1.05 + 1.7) +
+      0.18 * Math.sin(x * 0.0270 + time * 0.72 + 3.1)
+    );
+  }
+
+  function surfaceY(x, time) {
+    return oceanBase() - waveHeight(x, time);
+  }
+
+  function oceanColor(normalizedHeight) {
+    const value = clamp(normalizedHeight, 0, 1);
+    let from;
+    let to;
+    let amount;
+
+    if (value <= 0.5) {
+      from = troughColor;
+      to = midColor;
+      amount = value * 2;
+    } else {
+      from = midColor;
+      to = crestColor;
+      amount = (value - 0.5) * 2;
+    }
+
+    const r = Math.round(from[0] + (to[0] - from[0]) * amount);
+    const g = Math.round(from[1] + (to[1] - from[1]) * amount);
+    const b = Math.round(from[2] + (to[2] - from[2]) * amount);
+
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function drawCircle(x, y, radius, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function configureOceanGrid() {
+    const waterDepth = Math.max(80, height - oceanBase());
+    const aspect = width / waterDepth;
+
+    oceanColumns = clamp(Math.round(Math.sqrt(600 * aspect)), 20, 90);
+    oceanRows = Math.max(7, Math.round(600 / oceanColumns));
+  }
+
+  function resetBoat() {
+    boat.x = width * 0.5;
+    boat.y = surfaceY(boat.x, elapsed) - 7;
+    boat.vy = 0;
+    boat.angle = 0;
+    boat.angularVelocity = 0;
+    boat.initialized = true;
+  }
+
+  function resize() {
+    width = Math.max(1, window.innerWidth);
+    height = Math.max(1, window.innerHeight);
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    configureOceanGrid();
+    resetBoat();
+  }
+
+  function updateBoat(dt, time) {
+    const horizontalRange = Math.min(30, width * 0.045);
+    boat.x = width * 0.5 + Math.sin(time * 0.19) * horizontalRange;
+
+    const sampleDistance = clamp(width * 0.055, 35, 52);
+    const leftY = surfaceY(boat.x - sampleDistance, time);
+    const centerY = surfaceY(boat.x, time);
+    const rightY = surfaceY(boat.x + sampleDistance, time);
+
+    const targetY = (leftY + centerY * 2 + rightY) * 0.25 - 7;
+    const targetAngle = clamp(
+      Math.atan2(rightY - leftY, sampleDistance * 2),
+      -0.34,
+      0.34
+    );
+
+    boat.vy += (targetY - boat.y) * 18 * dt;
+    boat.vy *= Math.exp(-7 * dt);
+    boat.y += boat.vy * dt;
+
+    boat.angularVelocity += (targetAngle - boat.angle) * 15 * dt;
+    boat.angularVelocity *= Math.exp(-6 * dt);
+    boat.angle += boat.angularVelocity * dt;
+
+    boat.y = clamp(boat.y, targetY - 14, targetY + 14);
+    boat.angle = clamp(boat.angle, targetAngle - 0.15, targetAngle + 0.15);
+
+    if (!Number.isFinite(boat.y) || !Number.isFinite(boat.angle)) {
+      resetBoat();
+    }
+  }
+
+  function drawOcean(time) {
+    const base = oceanBase();
+    const amplitude = waveAmplitude();
+    const waterDepth = Math.max(1, height - base);
+    const cellWidth = width / oceanColumns;
+    const usableDepth = Math.max(1, waterDepth - 8);
+
+    for (let row = 0; row < oceanRows; row++) {
+      const depth = oceanRows === 1 ? 0 : row / (oceanRows - 1);
+      const attenuation = Math.pow(1 - depth, 1.6);
+      const radius = 2.35 + (1 - depth) * 0.9;
+
+      for (let column = 0; column < oceanColumns; column++) {
+        const id = row * oceanColumns + column;
+        const jitterX = (hash(id * 2 + 1) - 0.5) * cellWidth * 0.52;
+        const jitterY = (hash(id * 2 + 2) - 0.5) *
+          (row === 0 ? 2.2 : Math.min(8, usableDepth / oceanRows * 0.28));
+
+        let x = (column + 0.5) * cellWidth + jitterX;
+        x = clamp(x, radius, width - radius);
+
+        const localHeight = waveHeight(x, time);
+        let y = base + 4 + depth * usableDepth
+          - localHeight * attenuation + jitterY;
+        y = clamp(y, radius, height - radius);
+
+        const normalizedHeight = clamp(
+          0.5 + 0.5 * localHeight / (amplitude * 0.78),
+          0,
+          1
+        );
+
+        drawCircle(x, y, radius, oceanColor(normalizedHeight));
+      }
+    }
+  }
+
+  function drawShip() {
+    const scale = clamp(Math.min(width / 500, height / 300), 0.55, 1);
+    const cosine = Math.cos(boat.angle);
+    const sine = Math.sin(boat.angle);
+    const radius = 3.15 * scale;
+
+    for (let i = 0; i < shipPoints.length; i++) {
+      const point = shipPoints[i];
+      const localX = point.x * scale;
+      const localY = point.y * scale;
+      const x = boat.x + localX * cosine - localY * sine;
+      const y = boat.y + localX * sine + localY * cosine;
+
+      drawCircle(x, y, radius, "#ff8a3d");
+    }
+  }
+
+  function frame(timestamp) {
+    if (!previousTime) {
+      previousTime = timestamp;
+    }
+
+    const dt = clamp((timestamp - previousTime) / 1000, 0, 0.033);
+    previousTime = timestamp;
+    elapsed += dt;
+
+    updateBoat(dt, elapsed);
+
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, width, height);
+
+    drawOcean(elapsed);
+    drawShip();
+
+    requestAnimationFrame(frame);
+  }
+
+  makeShip();
+  resize();
+  window.addEventListener("resize", resize);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

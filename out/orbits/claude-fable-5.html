@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+
+  function resize(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var G = 1;
+  var EPS = 2;      // softening length
+  var EPS2 = EPS * EPS;
+
+  // Hierarchical system: heavy central body, medium inner orbiter, light outer orbiter.
+  // Produces long-lived non-colliding orbits.
+  var bodies = [
+    { m: 1000, x: 0,    y: 0, vx: 0, vy: 0,      color: '#ff8a3d' },
+    { m: 10,   x: 150,  y: 0, vx: 0, vy: 2.582,  color: '#4fd1ff' },
+    { m: 1,    x: -320, y: 0, vx: 0, vy: -1.7746, color: '#b48ead' }
+  ];
+
+  // Remove net momentum so COM stays fixed (camera still tracks it anyway).
+  (function(){
+    var px = 0, py = 0, M = 0;
+    for (var i = 0; i < 3; i++){
+      px += bodies[i].m * bodies[i].vx;
+      py += bodies[i].m * bodies[i].vy;
+      M += bodies[i].m;
+    }
+    for (var j = 0; j < 3; j++){
+      bodies[j].vx -= px / M;
+      bodies[j].vy -= py / M;
+    }
+  })();
+
+  // Radius scaled by mass, min 5px.
+  for (var i = 0; i < 3; i++){
+    bodies[i].r = Math.max(5, 1.2 * Math.cbrt(bodies[i].m));
+    bodies[i].trail = [];
+  }
+
+  function computeAccels(){
+    var ax = [0,0,0], ay = [0,0,0];
+    for (var i = 0; i < 3; i++){
+      for (var j = i + 1; j < 3; j++){
+        var dx = bodies[j].x - bodies[i].x;
+        var dy = bodies[j].y - bodies[i].y;
+        var r2 = dx*dx + dy*dy + EPS2;
+        var invR3 = 1 / (r2 * Math.sqrt(r2));
+        var fi = G * bodies[j].m * invR3;
+        var fj = G * bodies[i].m * invR3;
+        ax[i] += fi * dx; ay[i] += fi * dy;
+        ax[j] -= fj * dx; ay[j] -= fj * dy;
+      }
+    }
+    return { ax: ax, ay: ay };
+  }
+
+  function totalEnergy(){
+    var E = 0;
+    for (var i = 0; i < 3; i++){
+      var b = bodies[i];
+      E += 0.5 * b.m * (b.vx*b.vx + b.vy*b.vy);
+    }
+    for (var a = 0; a < 3; a++){
+      for (var c = a + 1; c < 3; c++){
+        var dx = bodies[c].x - bodies[a].x;
+        var dy = bodies[c].y - bodies[a].y;
+        E -= G * bodies[a].m * bodies[c].m / Math.sqrt(dx*dx + dy*dy + EPS2);
+      }
+    }
+    return E;
+  }
+
+  var acc = computeAccels();
+  var E0 = totalEnergy();
+  var DT = 0.02;
+  var SUBSTEPS = 10;
+  var TRAIL_MAX = 700;
+
+  function step(dt){
+    // Velocity Verlet (symplectic)
+    for (var i = 0; i < 3; i++){
+      var b = bodies[i];
+      b.x += b.vx * dt + 0.5 * acc.ax[i] * dt * dt;
+      b.y += b.vy * dt + 0.5 * acc.ay[i] * dt * dt;
+    }
+    var newAcc = computeAccels();
+    for (var j = 0; j < 3; j++){
+      var b2 = bodies[j];
+      b2.vx += 0.5 * (acc.ax[j] + newAcc.ax[j]) * dt;
+      b2.vy += 0.5 * (acc.ay[j] + newAcc.ay[j]) * dt;
+    }
+    acc = newAcc;
+  }
+
+  function frame(){
+    for (var s = 0; s < SUBSTEPS; s++) step(DT);
+
+    // Record trails
+    for (var i = 0; i < 3; i++){
+      var b = bodies[i];
+      b.trail.push({ x: b.x, y: b.y });
+      if (b.trail.length > TRAIL_MAX) b.trail.shift();
+    }
+
+    // Center of mass
+    var cx = 0, cy = 0, M = 0;
+    for (var k = 0; k < 3; k++){
+      cx += bodies[k].m * bodies[k].x;
+      cy += bodies[k].m * bodies[k].y;
+      M += bodies[k].m;
+    }
+    cx /= M; cy /= M;
+
+    var w = canvas.width, h = canvas.height;
+
+    // Background
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, w, h);
+
+    // Camera centered on COM
+    ctx.translate(w / 2 - cx, h / 2 - cy);
+
+    // Trails: own color at 30% opacity, fading toward tail, lineWidth 1
+    ctx.lineWidth = 1;
+    for (var t = 0; t < 3; t++){
+      var b3 = bodies[t];
+      var tr = b3.trail;
+      var n = tr.length;
+      if (n < 2) continue;
+      ctx.strokeStyle = b3.color;
+      for (var p = 1; p < n; p++){
+        ctx.globalAlpha = 0.3 * (p / n);
+        ctx.beginPath();
+        ctx.moveTo(tr[p-1].x, tr[p-1].y);
+        ctx.lineTo(tr[p].x, tr[p].y);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // Bodies: solid fill, no outline
+    for (var q = 0; q < 3; q++){
+      var b4 = bodies[q];
+      ctx.fillStyle = b4.color;
+      ctx.beginPath();
+      ctx.arc(b4.x, b4.y, b4.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Energy drift readout
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    var E = totalEnergy();
+    var drift = ((E - E0) / Math.abs(E0)) * 100;
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('energy drift: ' + drift.toFixed(6) + '%', 10, 10);
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

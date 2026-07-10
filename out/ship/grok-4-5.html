@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+*{margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#0b0b0d}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas=document.getElementById("c");
+const ctx=canvas.getContext("2d");
+let W=0,H=0;
+
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+}
+window.addEventListener("resize",()=>{resize();buildOcean();});
+resize();
+
+const waves=[
+  {A:30,k:0.0075,omega:1.1,phi:0.0},
+  {A:18,k:0.014,omega:-0.85,phi:1.3},
+  {A:12,k:0.021,omega:1.45,phi:0.6},
+  {A:7,k:0.033,omega:-1.7,phi:2.4}
+];
+const maxAmp=waves.reduce((s,w)=>s+w.A,0);
+
+function waveH(x,t){
+  let h=0;
+  for(let i=0;i<waves.length;i++){
+    const w=waves[i];
+    h+=w.A*Math.sin(w.k*x+w.omega*t+w.phi);
+  }
+  return h;
+}
+function waveD(x,t){
+  let d=0;
+  for(let i=0;i<waves.length;i++){
+    const w=waves[i];
+    d+=w.A*w.k*Math.cos(w.k*x+w.omega*t+w.phi);
+  }
+  return d;
+}
+
+function hexRgb(hex){
+  return[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)];
+}
+const C0=hexRgb("#1e3a8a");
+const C1=hexRgb("#4fd1ff");
+const C2=hexRgb("#eaf6ff");
+function mix(a,b,t){return a+(b-a)*t;}
+function colorAt(h){
+  const u=Math.max(0,Math.min(1,(h/maxAmp+1)*0.5));
+  let r,g,b;
+  if(u<0.5){
+    const t=u*2;
+    r=mix(C0[0],C1[0],t)|0;
+    g=mix(C0[1],C1[1],t)|0;
+    b=mix(C0[2],C1[2],t)|0;
+  }else{
+    const t=(u-0.5)*2;
+    r=mix(C1[0],C2[0],t)|0;
+    g=mix(C1[1],C2[1],t)|0;
+    b=mix(C1[2],C2[2],t)|0;
+  }
+  return"rgb("+r+","+g+","+b+")";
+}
+
+const ocean=[];
+function buildOcean(){
+  ocean.length=0;
+  const cols=50,rows=12;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      ocean.push({
+        xf:(c+0.5)/cols,
+        jx:(Math.random()-0.5)*(1/cols)*0.6,
+        depth:r*(7+Math.random()*2)+Math.random()*3,
+        rad:2.4+Math.random()*2.2,
+        row:r
+      });
+    }
+  }
+}
+buildOcean();
+
+const shipParts=[];
+(function buildShip(){
+  for(let i=-9;i<=9;i++){
+    const t=i/9;
+    const deck=4*(1-t*t);
+    shipParts.push({lx:i*3.6,ly:6+deck*0.15,r:3.8});
+    shipParts.push({lx:i*3.4,ly:2.5,r:3.6});
+  }
+  for(let i=-7;i<=7;i++){
+    shipParts.push({lx:i*3.5,ly:-0.5,r:3.4});
+  }
+  for(let i=-5;i<=5;i++){
+    shipParts.push({lx:i*3.2,ly:-3.2,r:3.0});
+  }
+  shipParts.push({lx:-34,ly:3,r:3.2});
+  shipParts.push({lx:34,ly:3,r:3.2});
+  shipParts.push({lx:-31,ly:7,r:2.8});
+  shipParts.push({lx:31,ly:7,r:2.8});
+  for(let i=0;i<14;i++){
+    shipParts.push({lx:2,ly:-5-i*3.6,r:2.8});
+  }
+  for(let i=-5;i<=5;i++){
+    shipParts.push({lx:2+i*3.8,ly:-32,r:2.4});
+  }
+  shipParts.push({lx:2,ly:-56,r:3.0});
+  shipParts.push({lx:6,ly:-54,r:2.4});
+})();
+
+let shipX=0;
+let smoothY=0;
+let smoothAng=0;
+let ready=false;
+
+function baseY(){return H*0.55;}
+
+let t0=performance.now();
+function frame(now){
+  const t=(now-t0)*0.001;
+  ctx.fillStyle="#0b0b0d";
+  ctx.fillRect(0,0,W,H);
+
+  const by=baseY();
+  if(!ready){
+    shipX=W*0.5;
+    smoothY=by+waveH(shipX,t);
+    smoothAng=Math.atan(waveD(shipX,t));
+    ready=true;
+  }
+
+  for(let i=0;i<ocean.length;i++){
+    const p=ocean[i];
+    const x=p.xf*W+p.jx*W;
+    const h=waveH(x,t);
+    const y=by+h+p.depth;
+    if(y<-12||y>H+12||x<-12||x>W+12)continue;
+    const fade=1-p.row*0.045;
+    const col=colorAt(h);
+    const m=col.match(/\d+/g);
+    const r=(m[0]*fade)|0,g=(m[1]*fade)|0,b=(m[2]*fade)|0;
+    ctx.beginPath();
+    ctx.arc(x,y,p.rad,0,Math.PI*2);
+    ctx.fillStyle="rgb("+r+","+g+","+b+")";
+    ctx.fill();
+  }
+
+  const targetY=by+waveH(shipX,t);
+  const targetAng=Math.atan(waveD(shipX,t));
+  const k=0.12;
+  smoothY+=(targetY-smoothY)*k;
+  smoothAng+=(targetAng-smoothAng)*k;
+
+  shipX+=Math.sin(t*0.25)*0.12;
+  if(shipX<W*0.22)shipX=W*0.22;
+  if(shipX>W*0.78)shipX=W*0.78;
+
+  const ca=Math.cos(smoothAng);
+  const sa=Math.sin(smoothAng);
+  const sy=smoothY+2;
+  for(let i=0;i<shipParts.length;i++){
+    const sp=shipParts[i];
+    const rx=sp.lx*ca-sp.ly*sa;
+    const ry=sp.lx*sa+sp.ly*ca;
+    ctx.beginPath();
+    ctx.arc(shipX+rx,sy+ry,sp.r,0,Math.PI*2);
+    ctx.fillStyle="#ff8a3d";
+    ctx.fill();
+  }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  const BALL_RADIUS = 12;
+  const GRAVITY = 800;
+  const AIR_FRICTION = 0.16;
+  const WALL_FRICTION = 0.22;
+  const RESTITUTION = 0.82;
+  const ANGULAR_SPEED = 0.45;
+  const MAX_TRAIL_POINTS = 150;
+
+  let width = 1;
+  let height = 1;
+  let centerX = 0;
+  let centerY = 0;
+  let hexRadius = 100;
+  let angle = Math.PI / 6;
+  let initialized = false;
+  let lastTime = 0;
+  let trailTimer = 0;
+
+  const ball = {
+    x: 0,
+    y: 0,
+    vx: 145,
+    vy: 0
+  };
+
+  const trail = [];
+  const vertices = Array.from({ length: 6 }, () => ({ x: 0, y: 0 }));
+
+  function updateVertices() {
+    for (let i = 0; i < 6; i++) {
+      const a = angle + i * Math.PI / 3;
+      vertices[i].x = centerX + Math.cos(a) * hexRadius;
+      vertices[i].y = centerY + Math.sin(a) * hexRadius;
+    }
+  }
+
+  function constrainBall(resolveVelocity) {
+    updateVertices();
+
+    for (let iteration = 0; iteration < 8; iteration++) {
+      let corrected = false;
+
+      for (let i = 0; i < 6; i++) {
+        const a = vertices[i];
+        const b = vertices[(i + 1) % 6];
+        const ex = b.x - a.x;
+        const ey = b.y - a.y;
+        const length = Math.hypot(ex, ey);
+        const tx = ex / length;
+        const ty = ey / length;
+        const nx = -ty;
+        const ny = tx;
+
+        const distance = (ball.x - a.x) * nx + (ball.y - a.y) * ny;
+
+        if (distance < BALL_RADIUS) {
+          const penetration = BALL_RADIUS - distance;
+          ball.x += nx * (penetration + 0.001);
+          ball.y += ny * (penetration + 0.001);
+          corrected = true;
+
+          if (resolveVelocity) {
+            const contactX = ball.x - nx * BALL_RADIUS;
+            const contactY = ball.y - ny * BALL_RADIUS;
+            const rx = contactX - centerX;
+            const ry = contactY - centerY;
+            const wallVX = -ANGULAR_SPEED * ry;
+            const wallVY = ANGULAR_SPEED * rx;
+
+            const relativeVX = ball.vx - wallVX;
+            const relativeVY = ball.vy - wallVY;
+            const normalVelocity = relativeVX * nx + relativeVY * ny;
+
+            if (normalVelocity < 0) {
+              const normalImpulse = -(1 + RESTITUTION) * normalVelocity;
+              ball.vx += nx * normalImpulse;
+              ball.vy += ny * normalImpulse;
+
+              const tangentVelocity = relativeVX * tx + relativeVY * ty;
+              const frictionLimit = WALL_FRICTION * normalImpulse;
+              const tangentImpulse = Math.max(
+                -frictionLimit,
+                Math.min(frictionLimit, -tangentVelocity)
+              );
+
+              ball.vx += tx * tangentImpulse;
+              ball.vy += ty * tangentImpulse;
+            }
+          }
+        }
+      }
+
+      if (!corrected) break;
+    }
+  }
+
+  function resize() {
+    const oldCenterX = centerX;
+    const oldCenterY = centerY;
+    const oldRadius = hexRadius;
+
+    width = Math.max(1, window.innerWidth);
+    height = Math.max(1, window.innerHeight);
+
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    centerX = width / 2;
+    centerY = height / 2;
+    hexRadius = Math.max(32, Math.min(width, height) * 0.36);
+
+    if (!initialized) {
+      ball.x = centerX;
+      ball.y = centerY - hexRadius * 0.34;
+      ball.vx = 145;
+      ball.vy = 0;
+      initialized = true;
+    } else {
+      const scale = oldRadius > 0 ? hexRadius / oldRadius : 1;
+
+      ball.x = centerX + (ball.x - oldCenterX) * scale;
+      ball.y = centerY + (ball.y - oldCenterY) * scale;
+      ball.vx *= scale;
+      ball.vy *= scale;
+
+      for (const point of trail) {
+        point.x = centerX + (point.x - oldCenterX) * scale;
+        point.y = centerY + (point.y - oldCenterY) * scale;
+      }
+    }
+
+    constrainBall(false);
+  }
+
+  function step(dt) {
+    angle += ANGULAR_SPEED * dt;
+    if (angle > Math.PI * 2) angle -= Math.PI * 2;
+
+    ball.vy += GRAVITY * dt;
+
+    const damping = Math.exp(-AIR_FRICTION * dt);
+    ball.vx *= damping;
+    ball.vy *= damping;
+
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    constrainBall(true);
+
+    trailTimer += dt;
+    if (trailTimer >= 1 / 60) {
+      trailTimer %= 1 / 60;
+      trail.push({ x: ball.x, y: ball.y });
+      if (trail.length > MAX_TRAIL_POINTS) trail.shift();
+    }
+  }
+
+  function makeHexagonPath() {
+    updateVertices();
+    ctx.beginPath();
+    ctx.moveTo(vertices[0].x, vertices[0].y);
+    for (let i = 1; i < 6; i++) {
+      ctx.lineTo(vertices[i].x, vertices[i].y);
+    }
+    ctx.closePath();
+  }
+
+  function render() {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    makeHexagonPath();
+    ctx.clip();
+
+    if (trail.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(trail[0].x, trail[0].y);
+      for (let i = 1; i < trail.length; i++) {
+        ctx.lineTo(trail[i].x, trail[i].y);
+      }
+      ctx.strokeStyle = "#ff8a3d";
+      ctx.globalAlpha = 0.3;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#ff8a3d";
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    makeHexagonPath();
+    ctx.strokeStyle = "#e6e6e6";
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "miter";
+    ctx.globalAlpha = 1;
+    ctx.stroke();
+  }
+
+  function animate(time) {
+    if (!lastTime) lastTime = time;
+    const frameDt = Math.min(0.033, Math.max(0, (time - lastTime) / 1000));
+    lastTime = time;
+
+    const substeps = Math.max(1, Math.ceil(frameDt / (1 / 240)));
+    const dt = frameDt / substeps;
+
+    for (let i = 0; i < substeps; i++) {
+      step(dt);
+    }
+
+    constrainBall(false);
+    render();
+    requestAnimationFrame(animate);
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

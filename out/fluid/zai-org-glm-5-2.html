@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SPH Fluid</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W = 0, H = 0;
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  setupContainer();
+}
+window.addEventListener('resize', resize);
+
+// ===== SPH Parameters (scaled for pixel units) =====
+const H_RAD = 18;              // smoothing radius (px)
+const H2 = H_RAD * H_RAD;
+const REST_DENS = 0.0045;
+const GAS_K = 2800;            // pressure stiffness
+const VISC = 0.5;              // viscosity
+const MASS = 65;
+const DT = 0.0022;
+const GY = 1100;               // gravity (px/s^2)
+const MAX_VEL = 1100;
+const PARTICLE_R = 3;
+const BOUND_DAMP = 0.35;
+const CONT_PAD = 70;
+
+// Precomputed kernels
+const POLY6 = 4 / (Math.PI * Math.pow(H_RAD, 8));
+const SPIKY_GRAD = -30 / (Math.PI * Math.pow(H_RAD, 5));
+const VISC_LAP = 40 / (Math.PI * Math.pow(H_RAD, 5));
+
+// Container bounds
+let cx0, cy0, cx1, cy1;
+
+function setupContainer() {
+  const cw = W - CONT_PAD * 2;
+  const ch = H - CONT_PAD * 2;
+  cx0 = CONT_PAD;
+  cy0 = CONT_PAD;
+  cx1 = CONT_PAD + cw;
+  cy1 = CONT_PAD + ch;
+}
+
+// ===== Particle storage (SoA for cache efficiency) =====
+const MAX_P = 1400;
+const px = new Float32Array(MAX_P);
+const py = new Float32Array(MAX_P);
+const pvx = new Float32Array(MAX_P);
+const pvy = new Float32Array(MAX_P);
+const pdens = new Float32Array(MAX_P);
+const pfx = new Float32Array(MAX_P);
+const pfy = new Float32Array(MAX_P);
+let N = 0;
+
+function initParticles() {
+  N = 0;
+  const spacing = 9;
+  const cols = 44;
+  const rows = 22;
+  const startX = cx0 + 30;
+  const startY = cy0 + 30;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (N >= 1000) break;
+      const jx = (Math.random() - 0.5) * 1.5;
+      const jy = (Math.random() - 0.5) * 1.5;
+      px[N] = startX + c * spacing + jx;
+      py[N] = startY + r * spacing + jy;
+      pvx[N] = 0;
+      pvy[N] = 0;
+      N++;
+    }
+  }
+}
+
+// ===== Spatial hash grid =====
+const CELL = H_RAD;
+let gridW = 0, gridH = 0;
+let gridHead = new Int32Array(1);
+let gridNext = new Int32Array(MAX_P);
+
+function gridReserve() {
+  const needW = Math.ceil((cx1 - cx0) / CELL) + 2;
+  const needH = Math.ceil((cy1 - cy0) / CELL) + 2;
+  if (needW > gridW || needH > gridH) {
+    gridW = Math.max(gridW, needW);
+    gridH = Math.max(gridH, needH);
+    gridHead = new Int32Array(gridW * gridH);
+  }
+}
+
+function buildGrid() {
+  gridReserve();
+  const total = gridW * gridH;
+  for (let i = 0; i < total; i++) gridHead[i] = -1;
+  for (let i = 0; i < N; i++) {
+    const gx = Math.max(0, Math.min(gridW - 1, ((px[i] - cx0) / CELL) | 0));
+    const gy = Math.max(0, Math.min(gridH - 1, ((py[i] - cy0) / CELL) | 0));
+    const idx = gy * gridW + gx;
+    gridNext[i] = gridHead[idx];
+    gridHead[idx] = i;
+  }
+}
+
+// ===== SPH step =====
+function step() {
+  // Apply rocking horizontal gravity + downward gravity, then integrate forces
+  const t = performance.now() * 0.001;
+  const gx = Math.sin(t * 0.55) * 620;
+
+  buildGrid();
+
+  // Density
+  for (let i = 0; i < N; i++) {
+    const xi = px[i], yi = py[i];
+    const gxi = Math.max(0, Math.min(gridW - 1, ((xi - cx0) / CELL) | 0));
+    const gyi = Math.max(0, Math.min(gridH - 1, ((yi - cy0) / CELL) | 0));
+    let dens = 0;
+    for (let oy = -1; oy <= 1; oy++) {
+      const ny = gyi + oy;
+      if (ny < 0 || ny >= gridH) continue;
+      for (let ox = -1; ox <= 1; ox++) {
+        const nx = gxi + ox;
+        if (nx < 0 || nx >= gridW) continue;
+        let j = gridHead[ny * gridW + nx];
+        while (j !== -1) {
+          const dx = xi - px[j];
+          const dy = yi - py[j];
+          const r2 = dx * dx + dy * dy;
+          if (r2 < H2) {
+            dens += MASS * POLY6 * (H2 - r2) * (H2 - r2) * (H2 - r2);
+          }
+          j = gridNext[j];
+        }
+      }
+    }
+    pdens[i] = dens;
+  }
+
+  // Forces (pressure + viscosity)
+  for (let i = 0; i < N; i++) {
+    const xi = px[i], yi = py[i];
+    const vi = pvx[i], vyi = pvy[i];
+    const di = pdens[i];
+    const pi = GAS_K * (di - REST_DENS);
+    const gxi = Math.max(0, Math.min(gridW - 1, ((xi - cx0) / CELL) | 0));
+    const gyi = Math.max(0, Math.min(gridH - 1, ((yi - cy0) / CELL) | 0));
+    let fx = 0, fy = 0;
+
+    for (let oy = -1; oy <= 1; oy++) {
+      const ny = gyi + oy;
+      if (ny < 0 || ny >= gridH) continue;
+      for (let ox = -1; ox <= 1; ox++) {
+        const nx = gxi + ox;
+        if (nx < 0 || nx >= gridW) continue;
+        let j = gridHead[ny * gridW + nx];
+        while (j !== -1) {
+          if (i !== j) {
+            const dx = xi - px[j];
+            const dy = yi - py[j];
+            const r2 = dx * dx + dy * dy;
+            if (r2 < H2 && r2 > 0.0001) {
+              const r = Math.sqrt(r2);
+              const dj = pdens[j];
+              const pj = GAS_K * (dj - REST_DENS);
+              const hmr = H_RAD - r;
+              const invR = 1 / r;
+              const term = -MASS * (pi + pj) * 0.5 * SPIKY_GRAD * hmr * hmr;
+              fx += term * dx * invR;
+              fy += term * dy * invR;
+              const vdx = pvx[j] - vi;
+              const vdy = pvy[j] - vyi;
+              const vterm = VISC * MASS * VISC_LAP * hmr / Math.max(dj, 1e-6);
+              fx += vterm * vdx;
+              fy += vterm * vdy;
+            }
+          }
+          j = gridNext[j];
+        }
+      }
+    }
+    fy += di * GY;
+    fx += di * gx;
+    pfx[i] = fx;
+    pfy[i] = fy;
+  }
+
+  // Integrate + boundary
+  for (let i = 0; i < N; i++) {
+    const di = Math.max(pdens[i], 1e-6);
+    pvx[i] += DT * pfx[i] / di;
+    pvy[i] += DT * pfy[i] / di;
+
+    const vmag = Math.sqrt(pvx[i] * pvx[i] + pvy[i] * pvy[i]);
+    if (vmag > MAX_VEL) {
+      const s = MAX_VEL / vmag;
+      pvx[i] *= s;
+      pvy[i] *= s;
+    }
+
+    px[i] += DT * pvx[i];
+    py[i] += DT * pvy[i];
+
+    const r = PARTICLE_R;
+    if (px[i] < cx0 + r) {
+      px[i] = cx0 + r;
+      if (pvx[i] < 0) pvx[i] = -pvx[i] * BOUND_DAMP;
+    } else if (px[i] > cx1 - r) {
+      px[i] = cx1 - r;
+      if (pvx[i] > 0) pvx[i] = -pvx[i] * BOUND_DAMP;
+    }
+    if (py[i] < cy0 + r) {
+      py[i] = cy0 + r;
+      if (pvy[i] < 0) pvy[i] = -pvy[i] * BOUND_DAMP;
+    } else if (py[i] > cy1 - r) {
+      py[i] = cy1 - r;
+      if (pvy[i] > 0) pvy[i] = -pvy[i] * BOUND_DAMP;
+    }
+  }
+}
+
+// ===== Color ramp: slow #3b82f6 -> medium #4fd1ff -> fast #eaf6ff =====
+const C1 = [0x3b, 0x82, 0xf6];
+const C2 = [0x4f, 0xd1, 0xff];
+const C3 = [0xea, 0xf6, 0xff];
+const SLOW_V = 80;
+const MED_V = 320;
+
+function speedColor(v) {
+  let r, g, b;
+  if (v < SLOW_V) {
+    const t = v / SLOW_V;
+    r = C1[0] + (C2[0] - C1[0]) * t;
+    g = C1[1] + (C2[1] - C1[1]) * t;
+    b = C1[2] + (C2[2] - C1[2]) * t;
+  } else if (v < MED_V) {
+    const t = (v - SLOW_V) / (MED_V - SLOW_V);
+    r = C2[0] + (C3[0] - C2[0]) * t;
+    g = C2[1] + (C3[1] - C2[1]) * t;
+    b = C2[2] + (C3[2] - C2[2]) * t;
+  } else {
+    r = C3[0]; g = C3[1]; b = C3[2];
+  }
+  return 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')';
+}
+
+function render() {
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  // Container walls
+  ctx.strokeStyle = '#e6e6e6';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.rect(cx0, cy0, cx1 - cx0, cy1 - cy0);
+  ctx.stroke();
+
+  // Particles
+  for (let i = 0; i < N; i++) {
+    const vx = pvx[i], vy = pvy[i];
+    const sp = Math.sqrt(vx * vx + vy * vy);
+    ctx.fillStyle = speedColor(sp);
+    ctx.beginPath();
+    ctx.arc(px[i], py[i], PARTICLE_R, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // HUD
+  ctx.fillStyle = '#e6e6e6';
+  ctx.font = '12px monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillText('particles: ' + N, 10, 10);
+}
+
+let last = performance.now();
+let acc = 0;
+const STEP_MS = 1000 / 60;
+let steps = 0;
+
+function loop(now) {
+  let dt = now - last;
+  if (dt > 100) dt = 100;
+  last = now;
+  acc += dt;
+  let n = 0;
+  while (acc >= STEP_MS && n < 4) {
+    step();
+    acc -= STEP_MS;
+    n++;
+    steps++;
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+resize();
+initParticles();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

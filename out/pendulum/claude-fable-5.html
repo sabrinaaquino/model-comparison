@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+
+  function resize(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Physics parameters
+  var g = 9.81;
+  var m1 = 1.0, m2 = 1.0;
+  var L1 = 1.0, L2 = 1.0; // meters (scaled for drawing)
+
+  // State: [theta1, omega1, theta2, omega2]
+  var state = [Math.PI/2 + 0.3, 0, Math.PI/2 - 0.2, 0];
+
+  function deriv(s){
+    var t1 = s[0], w1 = s[1], t2 = s[2], w2 = s[3];
+    var d = t1 - t2;
+    var cd = Math.cos(d), sd = Math.sin(d);
+    var denom = (2*m1 + m2 - m2*Math.cos(2*d));
+
+    var a1 = (-g*(2*m1 + m2)*Math.sin(t1)
+              - m2*g*Math.sin(t1 - 2*t2)
+              - 2*sd*m2*(w2*w2*L2 + w1*w1*L1*cd))
+             / (L1*denom);
+
+    var a2 = (2*sd*(w1*w1*L1*(m1 + m2)
+              + g*(m1 + m2)*Math.cos(t1)
+              + w2*w2*L2*m2*cd))
+             / (L2*denom);
+
+    return [w1, a1, w2, a2];
+  }
+
+  function rk4(s, h){
+    var k1 = deriv(s);
+    var s2 = [s[0]+0.5*h*k1[0], s[1]+0.5*h*k1[1], s[2]+0.5*h*k1[2], s[3]+0.5*h*k1[3]];
+    var k2 = deriv(s2);
+    var s3 = [s[0]+0.5*h*k2[0], s[1]+0.5*h*k2[1], s[2]+0.5*h*k2[2], s[3]+0.5*h*k2[3]];
+    var k3 = deriv(s3);
+    var s4 = [s[0]+h*k3[0], s[1]+h*k3[1], s[2]+h*k3[2], s[3]+h*k3[3]];
+    var k4 = deriv(s4);
+    return [
+      s[0] + h/6*(k1[0] + 2*k2[0] + 2*k3[0] + k4[0]),
+      s[1] + h/6*(k1[1] + 2*k2[1] + 2*k3[1] + k4[1]),
+      s[2] + h/6*(k1[2] + 2*k2[2] + 2*k3[2] + k4[2]),
+      s[3] + h/6*(k1[3] + 2*k2[3] + 2*k3[3] + k4[3])
+    ];
+  }
+
+  function energy(s){
+    var t1 = s[0], w1 = s[1], t2 = s[2], w2 = s[3];
+    var v1sq = L1*L1*w1*w1;
+    var v2sq = L1*L1*w1*w1 + L2*L2*w2*w2 + 2*L1*L2*w1*w2*Math.cos(t1 - t2);
+    var T = 0.5*m1*v1sq + 0.5*m2*v2sq;
+    var y1 = -L1*Math.cos(t1);
+    var y2 = y1 - L2*Math.cos(t2);
+    var V = m1*g*y1 + m2*g*y2;
+    return T + V;
+  }
+
+  var E0 = energy(state);
+
+  // Trail of lower bob
+  var trail = [];
+  var MAX_TRAIL = 500;
+
+  var simTime = 0;
+  var lastTs = null;
+  var FIXED_DT = 1/1000; // fixed physics step for stability
+
+  function frame(ts){
+    if (lastTs === null) lastTs = ts;
+    var frameDt = Math.min((ts - lastTs)/1000, 0.05);
+    lastTs = ts;
+
+    var steps = Math.round(frameDt / FIXED_DT);
+    for (var i = 0; i < steps; i++){
+      state = rk4(state, FIXED_DT);
+      simTime += FIXED_DT;
+    }
+
+    var w = canvas.width, h = canvas.height;
+    var cx = w/2, cy = h*0.35;
+    var scale = Math.min(w, h) * 0.42 / (L1 + L2);
+
+    var x1 = cx + scale*L1*Math.sin(state[0]);
+    var y1 = cy + scale*L1*Math.cos(state[0]);
+    var x2 = x1 + scale*L2*Math.sin(state[2]);
+    var y2 = y1 + scale*L2*Math.cos(state[2]);
+
+    trail.push({x: x2, y: y2});
+    if (trail.length > MAX_TRAIL) trail.shift();
+
+    // Background
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, w, h);
+
+    // Trail (fading, 30% max opacity, orange, lineWidth 1)
+    ctx.lineWidth = 1;
+    for (var j = 1; j < trail.length; j++){
+      var a = 0.3 * (j / trail.length);
+      ctx.strokeStyle = 'rgba(255,138,61,' + a.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.moveTo(trail[j-1].x, trail[j-1].y);
+      ctx.lineTo(trail[j].x, trail[j].y);
+      ctx.stroke();
+    }
+
+    // Rods
+    ctx.strokeStyle = '#e6e6e6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // Bobs
+    ctx.fillStyle = '#ff8a3d';
+    ctx.beginPath();
+    ctx.arc(x1, y1, 12, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x2, y2, 12, 0, Math.PI*2);
+    ctx.fill();
+
+    // Text
+    var E = energy(state);
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('t = ' + simTime.toFixed(1) + ' s', 10, 10);
+    ctx.fillText('E = ' + E.toFixed(4) + ' J (E0 = ' + E0.toFixed(4) + ')', 10, 26);
+    ctx.fillText('dE = ' + (E - E0).toExponential(2), 10, 42);
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

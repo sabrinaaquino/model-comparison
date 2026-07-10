@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W = 0, H = 0;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var COLS = 30;
+  var ROWS = 20;
+  var SPACING = Math.max(10, Math.min(22, Math.floor(W * 0.55 / COLS)));
+  var ITERATIONS = 8;
+  var GRAVITY = 0.35;
+  var DAMPING = 0.99;
+
+  var points = [];
+  var constraints = [];
+
+  function initCloth() {
+    points = [];
+    constraints = [];
+    var startX = (W - (COLS - 1) * SPACING) / 2;
+    var startY = Math.max(30, H * 0.08);
+    for (var y = 0; y < ROWS; y++) {
+      for (var x = 0; x < COLS; x++) {
+        var px = startX + x * SPACING;
+        var py = startY + y * SPACING;
+        points.push({
+          x: px, y: py,
+          px: px, py: py,
+          pinned: (y === 0)
+        });
+      }
+    }
+    for (var y = 0; y < ROWS; y++) {
+      for (var x = 0; x < COLS; x++) {
+        var i = y * COLS + x;
+        if (x < COLS - 1) constraints.push({ a: i, b: i + 1, len: SPACING });
+        if (y < ROWS - 1) constraints.push({ a: i, b: i + COLS, len: SPACING });
+      }
+    }
+  }
+  initCloth();
+
+  var t = 0;
+
+  function step() {
+    t += 1 / 60;
+
+    // Wind: time-varying horizontal force, varies over the cloth for ripples
+    var windBase = Math.sin(t * 0.9) * 0.28 + Math.sin(t * 2.3) * 0.14 + 0.18;
+
+    // Verlet integration
+    for (var i = 0; i < points.length; i++) {
+      var p = points[i];
+      if (p.pinned) continue;
+      var row = Math.floor(i / COLS);
+      var col = i % COLS;
+      var wind = windBase * (0.6 + 0.4 * Math.sin(t * 3.1 + col * 0.35 + row * 0.22));
+      var vx = (p.x - p.px) * DAMPING;
+      var vy = (p.y - p.py) * DAMPING;
+      p.px = p.x;
+      p.py = p.y;
+      p.x += vx + wind;
+      p.y += vy + GRAVITY;
+    }
+
+    // Constraint relaxation
+    for (var it = 0; it < ITERATIONS; it++) {
+      for (var c = 0; c < constraints.length; c++) {
+        var con = constraints[c];
+        var a = points[con.a], b = points[con.b];
+        var dx = b.x - a.x;
+        var dy = b.y - a.y;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 1e-6) continue;
+        var diff = (dist - con.len) / dist;
+        var offX = dx * 0.5 * diff;
+        var offY = dy * 0.5 * diff;
+        if (a.pinned && b.pinned) continue;
+        if (a.pinned) {
+          b.x -= offX * 2;
+          b.y -= offY * 2;
+        } else if (b.pinned) {
+          a.x += offX * 2;
+          a.y += offY * 2;
+        } else {
+          a.x += offX;
+          a.y += offY;
+          b.x -= offX;
+          b.y -= offY;
+        }
+      }
+    }
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, W, H);
+
+    // Mesh lines
+    ctx.strokeStyle = '#e6e6e6';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var c = 0; c < constraints.length; c++) {
+      var con = constraints[c];
+      var a = points[con.a], b = points[con.b];
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    }
+    ctx.stroke();
+
+    // Pinned points
+    ctx.fillStyle = '#ff8a3d';
+    for (var x = 0; x < COLS; x++) {
+      var p = points[x];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Label
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('cloth ' + COLS + 'x' + ROWS + '  points: ' + points.length + '  constraints: ' + constraints.length, 10, 10);
+  }
+
+  function loop() {
+    step();
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

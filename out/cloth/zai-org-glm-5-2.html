@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cloth</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+
+const COLS = 30;
+const ROWS = 20;
+let points = [];
+let structural = [];   // horizontal + vertical links
+let shear = [];       // diagonal links (for stability, not drawn)
+let restX = 0, restY = 0;
+let originX = 0, originY = 0;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  buildCloth();
+}
+
+function buildCloth() {
+  points = [];
+  structural = [];
+  shear = [];
+
+  const marginX = 80;
+  const marginTop = 70;
+  const marginBottom = 90;
+  const availW = W - marginX * 2;
+  const availH = H - marginTop - marginBottom;
+
+  // square cells for stability
+  const cell = Math.min(availW / (COLS - 1), availH / (ROWS - 1));
+  restX = cell;
+  restY = cell;
+
+  const clothW = restX * (COLS - 1);
+  originX = (W - clothW) / 2;
+  originY = marginTop;
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = originX + c * restX;
+      const y = originY + r * restY;
+      points.push({
+        x: x, y: y,
+        px: x, py: y,
+        pinned: (r === 0)
+      });
+    }
+  }
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c;
+      if (c < COLS - 1) structural.push({ a: i, b: i + 1, rest: restX });
+      if (r < ROWS - 1) structural.push({ a: i, b: i + COLS, rest: restY });
+    }
+  }
+
+  const diag = Math.hypot(restX, restY);
+  for (let r = 0; r < ROWS - 1; r++) {
+    for (let c = 0; c < COLS - 1; c++) {
+      const i = r * COLS + c;
+      shear.push({ a: i,     b: i + COLS + 1, rest: diag });
+      shear.push({ a: i + 1, b: i + COLS,     rest: diag });
+    }
+  }
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+const GRAVITY = 0.45;
+const DAMPING = 0.985;
+const ITER = 8;
+
+let t = 0;
+
+function step() {
+  t += 1;
+
+  // Time-varying horizontal wind with spatial variation -> traveling ripples.
+  const windBase = 0.9;
+  const windAmp = 0.9;
+
+  for (let p of points) {
+    if (p.pinned) continue;
+    const vx = (p.x - p.px) * DAMPING;
+    const vy = (p.y - p.py) * DAMPING;
+
+    // wind depends on horizontal position and time -> waves travel along cloth
+    const phase = (p.x - originX) * 0.012 - t * 0.05;
+    const wx = windBase + Math.sin(phase) * windAmp + Math.sin(phase * 0.5 + 1.3) * 0.4 * windAmp;
+    // small vertical perturbation for liveliness
+    const wy = Math.sin(phase * 1.7 + t * 0.03) * 0.15;
+
+    p.px = p.x;
+    p.py = p.y;
+    p.x += vx + wx;
+    p.y += vy + GRAVITY + wy;
+  }
+
+  // Constraint relaxation
+  for (let iter = 0; iter < ITER; iter++) {
+    // structural
+    for (let k = 0; k < structural.length; k++) {
+      const con = structural[k];
+      const a = points[con.a];
+      const b = points[con.b];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 1e-6) continue;
+      const diff = (dist - con.rest) / dist;
+      const ox = dx * 0.5 * diff;
+      const oy = dy * 0.5 * diff;
+      if (!a.pinned && !b.pinned) {
+        a.x += ox; a.y += oy;
+        b.x -= ox; b.y -= oy;
+      } else if (!a.pinned) {
+        a.x += ox * 2; a.y += oy * 2;
+      } else if (!b.pinned) {
+        b.x -= ox * 2; b.y -= oy * 2;
+      }
+    }
+    // shear (stiffness slightly softer)
+    for (let k = 0; k < shear.length; k++) {
+      const con = shear[k];
+      const a = points[con.a];
+      const b = points[con.b];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 1e-6) continue;
+      const diff = (dist - con.rest) / dist;
+      const ox = dx * 0.25 * diff;
+      const oy = dy * 0.25 * diff;
+      if (!a.pinned && !b.pinned) {
+        a.x += ox; a.y += oy;
+        b.x -= ox; b.y -= oy;
+      } else if (!a.pinned) {
+        a.x += ox * 2; a.y += oy * 2;
+      } else if (!b.pinned) {
+        b.x -= ox * 2; b.y -= oy * 2;
+      }
+    }
+  }
+}
+
+function draw() {
+  // Solid background, repainted every frame.
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  // Mesh: thin structural lines only.
+  ctx.strokeStyle = '#e6e6e6';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let k = 0; k < structural.length; k++) {
+    const con = structural[k];
+    const a = points[con.a];
+    const b = points[con.b];
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+  }
+  ctx.stroke();
+
+  // Pinned points as #ff8a3d dots, radius 4.
+  ctx.fillStyle = '#ff8a3d';
+  for (let p of points) {
+    if (p.pinned) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // On-screen text.
+  ctx.fillStyle = '#e6e6e6';
+  ctx.font = '12px monospace';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillText(
+    `cloth ${COLS}x${ROWS}  pts:${points.length}  links:${structural.length}  iter:${ITER}`,
+    10, 10
+  );
+}
+
+function loop() {
+  step();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>

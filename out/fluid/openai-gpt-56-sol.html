@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  const COUNT = 1000;
+  const PARTICLE_RADIUS = 3;
+  const SUPPORT_RADIUS = 14;
+  const SUPPORT_RADIUS_SQ = SUPPORT_RADIUS * SUPPORT_RADIUS;
+  const FIXED_DT = 1 / 120;
+  const PRESSURE_STIFFNESS = 10000;
+  const NEAR_PRESSURE_STIFFNESS = 10000;
+  const REST_DENSITY = 1.7;
+  const VISCOSITY = 5;
+  const MAX_SPEED = 1500;
+
+  const x = new Float32Array(COUNT);
+  const y = new Float32Array(COUNT);
+  const vx = new Float32Array(COUNT);
+  const vy = new Float32Array(COUNT);
+  const oldX = new Float32Array(COUNT);
+  const oldY = new Float32Array(COUNT);
+  const density = new Float32Array(COUNT);
+  const nearDensity = new Float32Array(COUNT);
+  const pressure = new Float32Array(COUNT);
+  const nearPressure = new Float32Array(COUNT);
+  const deltaVX = new Float32Array(COUNT);
+  const deltaVY = new Float32Array(COUNT);
+  const correctionX = new Float32Array(COUNT);
+  const correctionY = new Float32Array(COUNT);
+  const next = new Int32Array(COUNT);
+
+  let width = 1;
+  let height = 1;
+  let dpr = 1;
+  let left = 10;
+  let right = 100;
+  let top = 10;
+  let bottom = 100;
+  let gridWidth = 1;
+  let gridHeight = 1;
+  let gridHead = new Int32Array(1);
+  let accumulator = 0;
+  let lastTime = performance.now();
+  let simulationTime = 0;
+
+  function setBounds() {
+    let marginX = Math.min(36, Math.max(8, width * 0.055));
+    let marginY = Math.min(36, Math.max(8, height * 0.055));
+
+    if (width - marginX * 2 < 12) marginX = Math.max(1, (width - 12) * 0.5);
+    if (height - marginY * 2 < 12) marginY = Math.max(1, (height - 12) * 0.5);
+
+    left = marginX;
+    right = width - marginX;
+    top = marginY;
+    bottom = height - marginY;
+
+    gridWidth = Math.max(1, Math.ceil((right - left) / SUPPORT_RADIUS) + 1);
+    gridHeight = Math.max(1, Math.ceil((bottom - top) / SUPPORT_RADIUS) + 1);
+    gridHead = new Int32Array(gridWidth * gridHeight);
+  }
+
+  function initializeParticles() {
+    const minX = left + PARTICLE_RADIUS + 1;
+    const maxX = right - PARTICLE_RADIUS - 1;
+    const minY = top + PARTICLE_RADIUS + 1;
+    const maxY = bottom - PARTICLE_RADIUS - 1;
+    const availableWidth = Math.max(1, maxX - minX);
+    const availableHeight = Math.max(1, maxY - minY);
+
+    let spacing = 6.4;
+    let maxColumns = Math.max(1, Math.floor((availableWidth - spacing * 0.5) / spacing) + 1);
+    let maxRows = Math.max(1, Math.floor(availableHeight / spacing) + 1);
+    const aspect = Math.max(0.3, Math.min(4, (availableWidth * 0.68) / (availableHeight * 0.48)));
+
+    let columns = Math.max(1, Math.round(Math.sqrt(COUNT * aspect)));
+    columns = Math.min(columns, maxColumns);
+    let rows = Math.ceil(COUNT / columns);
+
+    if (rows > maxRows) {
+      columns = Math.min(maxColumns, Math.ceil(COUNT / maxRows));
+      rows = Math.ceil(COUNT / columns);
+    }
+
+    if (columns * maxRows < COUNT) {
+      columns = maxColumns;
+      rows = Math.ceil(COUNT / columns);
+      spacing = Math.max(
+        1,
+        Math.min(
+          spacing,
+          availableWidth / Math.max(1, columns),
+          availableHeight / Math.max(1, rows)
+        )
+      );
+    }
+
+    const blockWidth = Math.max(0, (columns - 1) * spacing + spacing * 0.5);
+    const startX = (left + right) * 0.5 - blockWidth * 0.5;
+    const baseY = maxY - 1;
+
+    for (let i = 0; i < COUNT; i++) {
+      const row = Math.floor(i / columns);
+      const column = i % columns;
+      const stagger = (row & 1) ? spacing * 0.5 : 0;
+
+      x[i] = Math.max(minX, Math.min(maxX, startX + column * spacing + stagger));
+      y[i] = Math.max(minY, Math.min(maxY, baseY - row * spacing));
+      vx[i] = 0;
+      vy[i] = 0;
+    }
+  }
+
+  function resize() {
+    width = Math.max(1, window.innerWidth);
+    height = Math.max(1, window.innerHeight);
+    dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    setBounds();
+    initializeParticles();
+    accumulator = 0;
+  }
+
+  function buildGrid() {
+    gridHead.fill(-1);
+
+    for (let i = 0; i < COUNT; i++) {
+      let gx = Math.floor((x[i] - left) / SUPPORT_RADIUS);
+      let gy = Math.floor((y[i] - top) / SUPPORT_RADIUS);
+
+      if (gx < 0) gx = 0;
+      else if (gx >= gridWidth) gx = gridWidth - 1;
+      if (gy < 0) gy = 0;
+      else if (gy >= gridHeight) gy = gridHeight - 1;
+
+      const cell = gy * gridWidth + gx;
+      next[i] = gridHead[cell];
+      gridHead[cell] = i;
+    }
+  }
+
+  function visitPairs(callback) {
+    for (let i = 0; i < COUNT; i++) {
+      const cellX = Math.max(0, Math.min(gridWidth - 1, Math.floor((x[i] - left) / SUPPORT_RADIUS)));
+      const cellY = Math.max(0, Math.min(gridHeight - 1, Math.floor((y[i] - top) / SUPPORT_RADIUS)));
+
+      const startX = Math.max(0, cellX - 1);
+      const endX = Math.min(gridWidth - 1, cellX + 1);
+      const startY = Math.max(0, cellY - 1);
+      const endY = Math.min(gridHeight - 1, cellY + 1);
+
+      for (let gy = startY; gy <= endY; gy++) {
+        for (let gx = startX; gx <= endX; gx++) {
+          let j = gridHead[gy * gridWidth + gx];
+
+          while (j !== -1) {
+            if (j > i) {
+              const dx = x[j] - x[i];
+              const dy = y[j] - y[i];
+              const distanceSq = dx * dx + dy * dy;
+
+              if (distanceSq < SUPPORT_RADIUS_SQ) {
+                callback(i, j, dx, dy, distanceSq);
+              }
+            }
+            j = next[j];
+          }
+        }
+      }
+    }
+  }
+
+  function enforceBounds() {
+    const minX = left + PARTICLE_RADIUS + 1;
+    const maxX = right - PARTICLE_RADIUS - 1;
+    const minY = top + PARTICLE_RADIUS + 1;
+    const maxY = bottom - PARTICLE_RADIUS - 1;
+
+    for (let i = 0; i < COUNT; i++) {
+      if (x[i] < minX) x[i] = minX;
+      else if (x[i] > maxX) x[i] = maxX;
+
+      if (y[i] < minY) y[i] = minY;
+      else if (y[i] > maxY) y[i] = maxY;
+    }
+  }
+
+  function resetParticle(i) {
+    const minX = left + PARTICLE_RADIUS + 1;
+    const maxX = right - PARTICLE_RADIUS - 1;
+    const minY = top + PARTICLE_RADIUS + 1;
+    const maxY = bottom - PARTICLE_RADIUS - 1;
+    const t = (i * 0.61803398875) % 1;
+
+    x[i] = minX + (maxX - minX) * (0.25 + t * 0.5);
+    y[i] = minY + (maxY - minY) * 0.65;
+    vx[i] = 0;
+    vy[i] = 0;
+  }
+
+  function simulate(dt) {
+    simulationTime += dt;
+
+    buildGrid();
+    deltaVX.fill(0);
+    deltaVY.fill(0);
+
+    visitPairs((i, j, dx, dy, distanceSq) => {
+      if (distanceSq < 0.000001) return;
+
+      const distance = Math.sqrt(distanceSq);
+      const q = 1 - distance / SUPPORT_RADIUS;
+      const amount = VISCOSITY * dt * q * q;
+      const changeX = (vx[j] - vx[i]) * amount;
+      const changeY = (vy[j] - vy[i]) * amount;
+
+      deltaVX[i] += changeX;
+      deltaVY[i] += changeY;
+      deltaVX[j] -= changeX;
+      deltaVY[j] -= changeY;
+    });
+
+    const gravityX = 380 * Math.sin(simulationTime * Math.PI * 2 / 8);
+    const gravityY = 900;
+
+    for (let i = 0; i < COUNT; i++) {
+      oldX[i] = x[i];
+      oldY[i] = y[i];
+
+      vx[i] += deltaVX[i] + gravityX * dt;
+      vy[i] += deltaVY[i] + gravityY * dt;
+
+      x[i] += vx[i] * dt;
+      y[i] += vy[i] * dt;
+    }
+
+    for (let iteration = 0; iteration < 2; iteration++) {
+      enforceBounds();
+      buildGrid();
+      density.fill(0);
+      nearDensity.fill(0);
+
+      visitPairs((i, j, dx, dy, distanceSq) => {
+        const distance = Math.sqrt(Math.max(distanceSq, 0.000001));
+        const q = 1 - distance / SUPPORT_RADIUS;
+        const q2 = q * q;
+        const q3 = q2 * q;
+
+        density[i] += q2;
+        density[j] += q2;
+        nearDensity[i] += q3;
+        nearDensity[j] += q3;
+      });
+
+      for (let i = 0; i < COUNT; i++) {
+        pressure[i] = Math.max(
+          -4000,
+          Math.min(24000, PRESSURE_STIFFNESS * (density[i] - REST_DENSITY))
+        );
+        nearPressure[i] = Math.min(
+          24000,
+          NEAR_PRESSURE_STIFFNESS * nearDensity[i]
+        );
+      }
+
+      correctionX.fill(0);
+      correctionY.fill(0);
+
+      visitPairs((i, j, dx, dy, distanceSq) => {
+        let distance = Math.sqrt(Math.max(distanceSq, 0.000001));
+        let nx;
+        let ny;
+
+        if (distanceSq < 0.000001) {
+          const angle = ((i * 97 + j * 57) % 628) * 0.01;
+          nx = Math.cos(angle);
+          ny = Math.sin(angle);
+          distance = 0.001;
+        } else {
+          nx = dx / distance;
+          ny = dy / distance;
+        }
+
+        const q = 1 - distance / SUPPORT_RADIUS;
+        const q2 = q * q;
+        let displacement = dt * dt * 0.5 * (
+          (pressure[i] + pressure[j]) * q +
+          (nearPressure[i] + nearPressure[j]) * q2
+        );
+
+        displacement = Math.max(-0.35, Math.min(0.75, displacement));
+
+        const moveX = nx * displacement;
+        const moveY = ny * displacement;
+
+        correctionX[i] -= moveX;
+        correctionY[i] -= moveY;
+        correctionX[j] += moveX;
+        correctionY[j] += moveY;
+      });
+
+      for (let i = 0; i < COUNT; i++) {
+        let cx = correctionX[i];
+        let cy = correctionY[i];
+        const lengthSq = cx * cx + cy * cy;
+
+        if (lengthSq > 4) {
+          const scale = 2 / Math.sqrt(lengthSq);
+          cx *= scale;
+          cy *= scale;
+        }
+
+        x[i] += cx;
+        y[i] += cy;
+      }
+    }
+
+    enforceBounds();
+
+    const minX = left + PARTICLE_RADIUS + 1;
+    const maxX = right - PARTICLE_RADIUS - 1;
+    const minY = top + PARTICLE_RADIUS + 1;
+    const maxY = bottom - PARTICLE_RADIUS - 1;
+
+    for (let i = 0; i < COUNT; i++) {
+      if (!Number.isFinite(x[i]) || !Number.isFinite(y[i])) {
+        resetParticle(i);
+        continue;
+      }
+
+      let newVX = (x[i] - oldX[i]) / dt;
+      let newVY = (y[i] - oldY[i]) / dt;
+
+      if (x[i] <= minX + 0.001 && newVX < 0) {
+        newVX *= -0.08;
+        newVY *= 0.98;
+      } else if (x[i] >= maxX - 0.001 && newVX > 0) {
+        newVX *= -0.08;
+        newVY *= 0.98;
+      }
+
+      if (y[i] <= minY + 0.001 && newVY < 0) {
+        newVY *= -0.08;
+        newVX *= 0.98;
+      } else if (y[i] >= maxY - 0.001 && newVY > 0) {
+        newVY *= -0.04;
+        newVX *= 0.995;
+      }
+
+      const speedSq = newVX * newVX + newVY * newVY;
+      if (!Number.isFinite(speedSq)) {
+        resetParticle(i);
+        continue;
+      }
+
+      if (speedSq > MAX_SPEED * MAX_SPEED) {
+        const scale = MAX_SPEED / Math.sqrt(speedSq);
+        newVX *= scale;
+        newVY *= scale;
+      }
+
+      vx[i] = newVX;
+      vy[i] = newVY;
+    }
+  }
+
+  function colorForSpeed(speed) {
+    let r, g, b, t;
+
+    if (speed <= 250) {
+      t = speed / 250;
+      r = Math.round(59 + (79 - 59) * t);
+      g = Math.round(130 + (209 - 130) * t);
+      b = Math.round(246 + (255 - 246) * t);
+    } else {
+      t = Math.min(1, (speed - 250) / 450);
+      r = Math.round(79 + (234 - 79) * t);
+      g = Math.round(209 + (246 - 209) * t);
+      b = 255;
+    }
+
+    return "rgb(" + r + "," + g + "," + b + ")";
+  }
+
+  function render() {
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, width, height);
+
+    for (let i = 0; i < COUNT; i++) {
+      const speed = Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+      ctx.fillStyle = colorForSpeed(speed);
+      ctx.beginPath();
+      ctx.arc(x[i], y[i], PARTICLE_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = "#e6e6e6";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(left, top, right - left, bottom - top);
+  }
+
+  function frame(now) {
+    let elapsed = (now - lastTime) / 1000;
+    lastTime = now;
+    elapsed = Math.min(0.04, Math.max(0, elapsed));
+    accumulator += elapsed;
+
+    let steps = 0;
+    while (accumulator >= FIXED_DT && steps < 5) {
+      simulate(FIXED_DT);
+      accumulator -= FIXED_DT;
+      steps++;
+    }
+
+    if (steps === 5 && accumulator >= FIXED_DT) accumulator = 0;
+
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+  render();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

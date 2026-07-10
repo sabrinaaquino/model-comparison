@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  const RADIUS = 7;
+  const DIAMETER = RADIUS * 2;
+  const MAX_OBJECTS = 120;
+  const GRAVITY = 820;
+  const FIXED_STEP = 1 / 120;
+  const LAUNCH_INTERVAL = 0.11;
+  const BODY_COLOR = "#ff8a3d";
+  const STRUCTURE_COLOR = "#e6e6e6";
+  const BACKGROUND_COLOR = "#0b0b0d";
+
+  let width = 0;
+  let height = 0;
+  let floorY = 0;
+  let leftWall = 18;
+  let rightWall = 0;
+  let dpr = 1;
+  let accumulator = 0;
+  let launchAccumulator = 0;
+  let lastTime = performance.now();
+  let launchNumber = 0;
+  let lastAngle = Math.PI / 4;
+  let trailCounter = 0;
+
+  const objects = [];
+
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.max(1, window.devicePixelRatio || 1);
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+
+    floorY = Math.max(80, height - 28);
+    rightWall = Math.max(leftWall + 60, width - 18);
+
+    for (const object of objects) {
+      object.x = Math.min(rightWall - RADIUS, Math.max(leftWall + RADIUS, object.x));
+      object.y = Math.min(floorY - RADIUS, object.y);
+      for (const point of object.trail) {
+        point.x = Math.min(rightWall - RADIUS, Math.max(leftWall + RADIUS, point.x));
+        point.y = Math.min(floorY - RADIUS, point.y);
+      }
+    }
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+
+  function launcherGeometry(angle) {
+    const baseX = leftWall + 17;
+    const baseY = floorY - 9;
+    const barrelLength = 38;
+    return {
+      baseX,
+      baseY,
+      muzzleX: baseX + Math.cos(angle) * barrelLength,
+      muzzleY: baseY - Math.sin(angle) * barrelLength
+    };
+  }
+
+  function launchObject() {
+    const phase = launchNumber++;
+    const angleDegrees =
+      38 +
+      18 * Math.sin(phase * 0.73) +
+      7 * Math.sin(phase * 0.217 + 1.3);
+    const speed =
+      475 +
+      105 * Math.sin(phase * 0.417 + 0.8) +
+      45 * Math.sin(phase * 1.137);
+
+    lastAngle = Math.max(0.38, Math.min(1.28, angleDegrees * Math.PI / 180));
+    const launcher = launcherGeometry(lastAngle);
+
+    const object = {
+      x: launcher.muzzleX,
+      y: launcher.muzzleY,
+      vx: Math.cos(lastAngle) * speed,
+      vy: -Math.sin(lastAngle) * speed,
+      trail: [],
+      age: 0
+    };
+
+    object.trail.push({ x: object.x, y: object.y });
+    objects.push(object);
+
+    if (objects.length > MAX_OBJECTS) {
+      objects.shift();
+    }
+  }
+
+  function constrainObject(object) {
+    const minX = leftWall + RADIUS;
+    const maxX = rightWall - RADIUS;
+    const maxY = floorY - RADIUS;
+
+    if (object.x < minX) {
+      object.x = minX;
+      if (object.vx < 0) object.vx = -object.vx * 0.58;
+    } else if (object.x > maxX) {
+      object.x = maxX;
+      if (object.vx > 0) object.vx = -object.vx * 0.58;
+    }
+
+    if (object.y > maxY) {
+      object.y = maxY;
+      if (object.vy > 0) {
+        if (object.vy < 45) {
+          object.vy = 0;
+        } else {
+          object.vy = -object.vy * 0.34;
+        }
+      }
+
+      object.vx *= Math.abs(object.vy) < 20 ? 0.94 : 0.985;
+      if (Math.abs(object.vx) < 0.8) object.vx = 0;
+    }
+  }
+
+  function solveCollisions() {
+    const cellSize = DIAMETER + 2;
+
+    for (let iteration = 0; iteration < 3; iteration++) {
+      const grid = new Map();
+
+      for (let i = 0; i < objects.length; i++) {
+        const object = objects[i];
+        const cellX = Math.floor(object.x / cellSize);
+        const cellY = Math.floor(object.y / cellSize);
+        const key = cellX + "," + cellY;
+        let cell = grid.get(key);
+        if (!cell) {
+          cell = [];
+          grid.set(key, cell);
+        }
+        cell.push(i);
+      }
+
+      for (let i = 0; i < objects.length; i++) {
+        const a = objects[i];
+        const cellX = Math.floor(a.x / cellSize);
+        const cellY = Math.floor(a.y / cellSize);
+
+        for (let offsetY = -1; offsetY <= 1; offsetY++) {
+          for (let offsetX = -1; offsetX <= 1; offsetX++) {
+            const cell = grid.get((cellX + offsetX) + "," + (cellY + offsetY));
+            if (!cell) continue;
+
+            for (const j of cell) {
+              if (j <= i) continue;
+
+              const b = objects[j];
+              let dx = b.x - a.x;
+              let dy = b.y - a.y;
+              let distanceSquared = dx * dx + dy * dy;
+
+              if (distanceSquared >= DIAMETER * DIAMETER) continue;
+
+              if (distanceSquared < 0.0001) {
+                dx = ((i + j) & 1) ? 0.01 : -0.01;
+                dy = -0.01;
+                distanceSquared = dx * dx + dy * dy;
+              }
+
+              const distance = Math.sqrt(distanceSquared);
+              const nx = dx / distance;
+              const ny = dy / distance;
+              const overlap = DIAMETER - distance;
+              const correction = overlap * 0.48;
+
+              a.x -= nx * correction;
+              a.y -= ny * correction;
+              b.x += nx * correction;
+              b.y += ny * correction;
+
+              const relativeX = b.vx - a.vx;
+              const relativeY = b.vy - a.vy;
+              const normalSpeed = relativeX * nx + relativeY * ny;
+
+              if (normalSpeed < 0) {
+                const restitution = normalSpeed < -55 ? 0.24 : 0.04;
+                const impulse = -(1 + restitution) * normalSpeed * 0.5;
+
+                a.vx -= nx * impulse;
+                a.vy -= ny * impulse;
+                b.vx += nx * impulse;
+                b.vy += ny * impulse;
+
+                const tx = -ny;
+                const ty = nx;
+                const tangentSpeed = relativeX * tx + relativeY * ty;
+                const frictionImpulse = Math.max(
+                  -impulse * 0.22,
+                  Math.min(impulse * 0.22, -tangentSpeed * 0.12)
+                );
+
+                a.vx -= tx * frictionImpulse;
+                a.vy -= ty * frictionImpulse;
+                b.vx += tx * frictionImpulse;
+                b.vy += ty * frictionImpulse;
+              }
+            }
+          }
+        }
+      }
+
+      for (const object of objects) constrainObject(object);
+    }
+  }
+
+  function update(dt) {
+    launchAccumulator += dt;
+    while (launchAccumulator >= LAUNCH_INTERVAL) {
+      launchAccumulator -= LAUNCH_INTERVAL;
+      launchObject();
+    }
+
+    for (const object of objects) {
+      object.age += dt;
+      object.vy += GRAVITY * dt;
+
+      const speed = Math.hypot(object.vx, object.vy);
+      if (speed > 950) {
+        const scale = 950 / speed;
+        object.vx *= scale;
+        object.vy *= scale;
+      }
+
+      object.x += object.vx * dt;
+      object.y += object.vy * dt;
+      constrainObject(object);
+    }
+
+    solveCollisions();
+
+    trailCounter++;
+    if (trailCounter >= 4) {
+      trailCounter = 0;
+      for (const object of objects) {
+        object.trail.push({ x: object.x, y: object.y });
+        if (object.trail.length > 9) object.trail.shift();
+      }
+    }
+  }
+
+  function drawStructure() {
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = STRUCTURE_COLOR;
+    ctx.lineWidth = 2;
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+    ctx.beginPath();
+    ctx.moveTo(leftWall, 10);
+    ctx.lineTo(leftWall, floorY);
+    ctx.lineTo(rightWall, floorY);
+    ctx.lineTo(rightWall, 10);
+    ctx.stroke();
+
+    const launcher = launcherGeometry(lastAngle);
+    ctx.beginPath();
+    ctx.moveTo(launcher.baseX - 9, floorY);
+    ctx.lineTo(launcher.baseX, launcher.baseY);
+    ctx.lineTo(launcher.muzzleX, launcher.muzzleY);
+    ctx.stroke();
+  }
+
+  function drawTrails() {
+    ctx.strokeStyle = BODY_COLOR;
+    ctx.lineWidth = 1;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 0.3;
+
+    for (const object of objects) {
+      if (object.trail.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(object.trail[0].x, object.trail[0].y);
+      for (let i = 1; i < object.trail.length; i++) {
+        ctx.lineTo(object.trail[i].x, object.trail[i].y);
+      }
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  function drawObjects() {
+    ctx.fillStyle = BODY_COLOR;
+    ctx.globalAlpha = 1;
+
+    for (const object of objects) {
+      ctx.beginPath();
+      ctx.arc(object.x, object.y, RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawText() {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = STRUCTURE_COLOR;
+    ctx.font = "12px monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("objects: " + objects.length + "/" + MAX_OBJECTS, 10, 10);
+  }
+
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = BACKGROUND_COLOR;
+    ctx.fillRect(0, 0, width, height);
+
+    drawTrails();
+    drawObjects();
+    drawStructure();
+    drawText();
+  }
+
+  function frame(now) {
+    let elapsed = (now - lastTime) / 1000;
+    lastTime = now;
+    elapsed = Math.min(elapsed, 0.05);
+    accumulator += elapsed;
+
+    while (accumulator >= FIXED_STEP) {
+      update(FIXED_STEP);
+      accumulator -= FIXED_STEP;
+    }
+
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

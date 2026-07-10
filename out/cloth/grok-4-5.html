@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+*{margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#0b0b0d}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const COLS = 28;
+const ROWS = 18;
+const ITERATIONS = 8;
+const GRAVITY = 0.18;
+const DAMPING = 0.985;
+
+let points = [];
+let constraints = [];
+let spacing = 20;
+let startX = 0;
+let startY = 50;
+let t = 0;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  initCloth();
+}
+
+function initCloth() {
+  points = [];
+  constraints = [];
+  const maxW = Math.min(canvas.width * 0.72, 720);
+  spacing = maxW / (COLS - 1);
+  startX = (canvas.width - maxW) * 0.5;
+  startY = Math.max(40, canvas.height * 0.06);
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const px = startX + x * spacing;
+      const py = startY + y * spacing;
+      points.push({
+        x: px,
+        y: py,
+        ox: px,
+        oy: py,
+        pinned: y === 0
+      });
+    }
+  }
+
+  function idx(x, y) { return y * COLS + x; }
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (x < COLS - 1) {
+        constraints.push({ a: idx(x, y), b: idx(x + 1, y), rest: spacing });
+      }
+      if (y < ROWS - 1) {
+        constraints.push({ a: idx(x, y), b: idx(x, y + 1), rest: spacing });
+      }
+      if (x < COLS - 1 && y < ROWS - 1) {
+        const d = spacing * Math.SQRT2;
+        constraints.push({ a: idx(x, y), b: idx(x + 1, y + 1), rest: d });
+        constraints.push({ a: idx(x + 1, y), b: idx(x, y + 1), rest: d });
+      }
+    }
+  }
+}
+
+function satisfy(c) {
+  const p1 = points[c.a];
+  const p2 = points[c.b];
+  let dx = p2.x - p1.x;
+  let dy = p2.y - p1.y;
+  let dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < 1e-6) return;
+  const inv1 = p1.pinned ? 0 : 1;
+  const inv2 = p2.pinned ? 0 : 1;
+  const total = inv1 + inv2;
+  if (total === 0) return;
+  const diff = (dist - c.rest) / dist;
+  const ox = dx * diff;
+  const oy = dy * diff;
+  p1.x += ox * (inv1 / total);
+  p1.y += oy * (inv1 / total);
+  p2.x -= ox * (inv2 / total);
+  p2.y -= oy * (inv2 / total);
+}
+
+function step() {
+  t += 0.016;
+  const wind =
+    Math.sin(t * 0.7) * 0.22 +
+    Math.sin(t * 1.9 + 1.2) * 0.12 +
+    Math.sin(t * 0.31) * 0.08;
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (p.pinned) continue;
+    let vx = (p.x - p.ox) * DAMPING;
+    let vy = (p.y - p.oy) * DAMPING;
+    p.ox = p.x;
+    p.oy = p.y;
+    const row = Math.floor(i / COLS);
+    const windScale = 0.4 + (row / ROWS) * 0.9;
+    p.x += vx + wind * windScale;
+    p.y += vy + GRAVITY;
+  }
+
+  for (let k = 0; k < ITERATIONS; k++) {
+    for (let i = 0; i < constraints.length; i++) {
+      satisfy(constraints[i]);
+    }
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      if (p.pinned) {
+        const col = i % COLS;
+        p.x = startX + col * spacing;
+        p.y = startY;
+        p.ox = p.x;
+        p.oy = p.y;
+      }
+    }
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = '#e6e6e6';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(startX - 8, startY);
+  ctx.lineTo(startX + (COLS - 1) * spacing + 8, startY);
+  ctx.stroke();
+
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < constraints.length; i++) {
+    const c = constraints[i];
+    const p1 = points[c.a];
+    const p2 = points[c.b];
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = '#ff8a3d';
+  for (let i = 0; i < COLS; i++) {
+    const p = points[i];
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = '#e6e6e6';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const windVal = (
+    Math.sin(t * 0.7) * 0.22 +
+    Math.sin(t * 1.9 + 1.2) * 0.12 +
+    Math.sin(t * 0.31) * 0.08
+  ).toFixed(3);
+  ctx.fillText('points: ' + points.length + '  wind: ' + windVal, 10, 10);
+}
+
+function frame() {
+  step();
+  draw();
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

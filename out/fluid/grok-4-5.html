@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPH Fluid</title>
+<style>
+*{margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#0b0b0d}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+
+const N=1000;
+const R=3;
+const H=18;
+const H2=H*H;
+const MASS=2.5;
+const REST_DENSITY=300;
+const GAS_K=1800;
+const MU=220;
+const G_Y=980;
+const ROCK_AMP=320;
+const ROCK_OMEGA=1.15;
+const DT=0.0045;
+const SUBSTEPS=2;
+const DAMP=0.45;
+const VEL_CLAMP=2200;
+const EPS=1e-6;
+
+const POLY6=315/(64*Math.PI*Math.pow(H,9));
+const SPIKY_GRAD=-45/(Math.PI*Math.pow(H,6));
+const VISC_LAP=45/(Math.PI*Math.pow(H,6));
+
+const C_SLOW=[59,130,246];
+const C_MED=[79,209,255];
+const C_FAST=[234,246,255];
+
+let W,Ht,dpr;
+let box={l:0,t:0,r:0,b:0};
+let particles=[];
+let grid=null;
+let cellSize=H;
+let cols=0,rows=0;
+let t0=performance.now();
+let frames=0,fps=60,lastFpsT=t0;
+
+function resize(){
+  dpr=window.devicePixelRatio||1;
+  W=window.innerWidth;
+  Ht=window.innerHeight;
+  canvas.width=Math.floor(W*dpr);
+  canvas.height=Math.floor(Ht*dpr);
+  canvas.style.width=W+'px';
+  canvas.style.height=Ht+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const m=Math.max(36,Math.min(W,Ht)*0.06);
+  box.l=m;
+  box.t=m;
+  box.r=W-m;
+  box.b=Ht-m;
+  cellSize=H;
+  cols=Math.ceil((box.r-box.l)/cellSize)+2;
+  rows=Math.ceil((box.b-box.t)/cellSize)+2;
+  if(particles.length===0) initParticles();
+  else clampAllToBox();
+}
+
+function initParticles(){
+  particles=[];
+  const spacing=H*0.55;
+  const bw=box.r-box.l;
+  const bh=box.b-box.t;
+  const colsP=Math.floor(bw*0.72/spacing);
+  const rowsP=Math.ceil(N/colsP);
+  const startX=box.l+(bw-colsP*spacing)*0.5+spacing*0.5;
+  const startY=box.b-spacing*0.5-4;
+  let n=0;
+  for(let j=0;j<rowsP&&n<N;j++){
+    for(let i=0;i<colsP&&n<N;i++){
+      const x=startX+i*spacing+(Math.random()-0.5)*1.2;
+      const y=startY-j*spacing+(Math.random()-0.5)*1.2;
+      particles.push({
+        x,y,px:x,py:y,
+        vx:0,vy:0,
+        fx:0,fy:0,
+        dens:REST_DENSITY,
+        press:0
+      });
+      n++;
+    }
+  }
+}
+
+function clampAllToBox(){
+  for(let i=0;i<particles.length;i++){
+    const p=particles[i];
+    if(p.x<box.l+R){p.x=box.l+R;p.vx*=-DAMP;}
+    if(p.x>box.r-R){p.x=box.r-R;p.vx*=-DAMP;}
+    if(p.y<box.t+R){p.y=box.t+R;p.vy*=-DAMP;}
+    if(p.y>box.b-R){p.y=box.b-R;p.vy*=-DAMP;}
+    p.px=p.x;p.py=p.y;
+  }
+}
+
+function cellIndex(x,y){
+  const cx=Math.floor((x-box.l)/cellSize)+1;
+  const cy=Math.floor((y-box.t)/cellSize)+1;
+  if(cx<0||cy<0||cx>=cols||cy>=rows) return -1;
+  return cy*cols+cx;
+}
+
+function buildGrid(){
+  const size=cols*rows;
+  if(!grid||grid.length!==size){
+    grid=new Array(size);
+  }
+  for(let i=0;i<size;i++) grid[i]=null;
+  for(let i=0;i<particles.length;i++){
+    const p=particles[i];
+    const idx=cellIndex(p.x,p.y);
+    if(idx<0) continue;
+    p._next=grid[idx];
+    grid[idx]=p;
+  }
+}
+
+function forNeighbors(p,fn){
+  const cx=Math.floor((p.x-box.l)/cellSize)+1;
+  const cy=Math.floor((p.y-box.t)/cellSize)+1;
+  for(let oy=-1;oy<=1;oy++){
+    for(let ox=-1;ox<=1;ox++){
+      const nx=cx+ox,ny=cy+oy;
+      if(nx<0||ny<0||nx>=cols||ny>=rows) continue;
+      let q=grid[ny*cols+nx];
+      while(q){
+        fn(q);
+        q=q._next;
+      }
+    }
+  }
+}
+
+function computeDensityPressure(){
+  for(let i=0;i<particles.length;i++){
+    const p=particles[i];
+    let dens=0;
+    forNeighbors(p,function(q){
+      const dx=p.x-q.x;
+      const dy=p.y-q.y;
+      const r2=dx*dx+dy*dy;
+      if(r2<H2){
+        const t=H2-r2;
+        dens+=MASS*POLY6*t*t*t;
+      }
+    });
+    dens=Math.max(dens,REST_DENSITY*0.15);
+    if(!isFinite(dens)) dens=REST_DENSITY;
+    p.dens=dens;
+    p.press=GAS_K*(dens-REST_DENSITY);
+  }
+}
+
+function computeForces(gx,gy){
+  for(let i=0;i<particles.length;i++){
+    const p=particles[i];
+    let fx=0,fy=0;
+    forNeighbors(p,function(q){
+      if(p===q) return;
+      let dx=p.x-q.x;
+      let dy=p.y-q.y;
+      let r2=dx*dx+dy*dy;
+      if(r2>=H2||r2<EPS) return;
+      const r=Math.sqrt(r2);
+      const invR=1/r;
+      const hr=H-r;
+      // pressure
+      const pressTerm=p.press/(p.dens*p.dens+EPS)+q.press/(q.dens*q.dens+EPS);
+      const fPress=MASS*pressTerm*SPIKY_GRAD*hr*hr;
+      fx+=fPress*dx*invR;
+      fy+=fPress*dy*invR;
+      // viscosity
+      const visc=MU*MASS*(VISC_LAP*hr)/(q.dens+EPS);
+      fx+=visc*(q.vx-p.vx);
+      fy+=visc*(q.vy-p.vy);
+    });
+    fx+=gx*p.dens;
+    fy+=gy*p.dens;
+    if(!isFinite(fx)) fx=0;
+    if(!isFinite(fy)) fy=0;
+    p.fx=fx;
+    p.fy=fy;
+  }
+}
+
+function integrate(dt){
+  for(let i=0;i<particles.length;i++){
+    const p=particles[i];
+    p.px=p.x;
+    p.py=p.y;
+    const invD=1/(p.dens+EPS);
+    p.vx+=p.fx*invD*dt;
+    p.vy+=p.fy*invD*dt;
+    const sp=Math.hypot(p.vx,p.vy);
+    if(sp>VEL_CLAMP){
+      const s=VEL_CLAMP/sp;
+      p.vx*=s;p.vy*=s;
+    }
+    if(!isFinite(p.vx)) p.vx=0;
+    if(!isFinite(p.vy)) p.vy=0;
+    p.x+=p.vx*dt;
+    p.y+=p.vy*dt;
+    // walls
+    if(p.x<box.l+R){p.x=box.l+R;p.vx=Math.abs(p.vx)*DAMP;}
+    else if(p.x>box.r-R){p.x=box.r-R;p.vx=-Math.abs(p.vx)*DAMP;}
+    if(p.y<box.t+R){p.y=box.t+R;p.vy=Math.abs(p.vy)*DAMP;}
+    else if(p.y>box.b-R){p.y=box.b-R;p.vy=-Math.abs(p.vy)*DAMP;}
+    if(!isFinite(p.x)||!isFinite(p.y)){
+      p.x=(box.l+box.r)*0.5;
+      p.y=(box.t+box.b)*0.5;
+      p.vx=0;p.vy=0;
+    }
+  }
+}
+
+function speedColor(s){
+  // slow ~0, medium ~180, fast ~450+
+  const a=0,b=180,c=480;
+  let r,g,bl;
+  if(s<=b){
+    const t=Math.max(0,Math.min(1,(s-a)/(b-a)));
+    r=C_SLOW[0]+(C_MED[0]-C_SLOW[0])*t;
+    g=C_SLOW[1]+(C_MED[1]-C_SLOW[1])*t;
+    bl=C_SLOW[2]+(C_MED[2]-C_SLOW[2])*t;
+  }else{
+    const t=Math.max(0,Math.min(1,(s-b)/(c-b)));
+    r=C_MED[0]+(C_FAST[0]-C_MED[0])*t;
+    g=C_MED[1]+(C_FAST[1]-C_MED[1])*t;
+    bl=C_MED[2]+(C_FAST[2]-C_MED[2])*t;
+  }
+  return [r|0,g|0,bl|0];
+}
+
+function draw(){
+  ctx.fillStyle='#0b0b0d';
+  ctx.fillRect(0,0,W,Ht);
+
+  // container walls
+  ctx.strokeStyle='#e6e6e6';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.rect(box.l,box.t,box.r-box.l,box.b-box.t);
+  ctx.stroke();
+
+  // trails
+  ctx.lineWidth=1;
+  for(let i=0;i<particles.length;i++){
+    const p=particles[i];
+    const s=Math.hypot(p.vx,p.vy);
+    const col=speedColor(s);
+    ctx.strokeStyle='rgba('+col[0]+','+col[1]+','+col[2]+',0.3)';
+    ctx.beginPath();
+    ctx.moveTo(p.px,p.py);
+    ctx.lineTo(p.x,p.y);
+    ctx.stroke();
+  }
+
+  // particles
+  for(let i=0;i<particles.length;i++){
+    const p=particles[i];
+    const s=Math.hypot(p.vx,p.vy);
+    const col=speedColor(s);
+    ctx.fillStyle='rgb('+col[0]+','+col[1]+','+col[2]+')';
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,R,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  // text
+  ctx.fillStyle='#e6e6e6';
+  ctx.font='12px monospace';
+  ctx.textBaseline='top';
+  ctx.fillText('particles: '+particles.length+'  fps: '+fps,10,10);
+}
+
+function frame(now){
+  frames++;
+  if(now-lastFpsT>=500){
+    fps=Math.round(frames*1000/(now-lastFpsT));
+    frames=0;
+    lastFpsT=now;
+  }
+  const time=(now-t0)*0.001;
+  const gx=ROCK_AMP*Math.sin(time*ROCK_OMEGA);
+  const gy=G_Y;
+
+  const stepDt=DT/SUBSTEPS;
+  for(let s=0;s<SUBSTEPS;s++){
+    buildGrid();
+    computeDensityPressure();
+    computeForces(gx,gy);
+    integrate(stepDt);
+  }
+
+  draw();
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener('resize',resize);
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
