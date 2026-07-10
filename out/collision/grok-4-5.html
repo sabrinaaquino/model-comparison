@@ -1,244 +1,477 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Neon Collider</title>
+<title>Bolas Colidem</title>
 <style>
-*{margin:0;padding:0;overflow:hidden;background:#000}
-canvas{display:block;width:100%;height:100%}
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #7ec8e3; }
+  canvas { display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <script>
-const canvas=document.getElementById('c');
-const ctx=canvas.getContext('2d');
-const COLORS=['#00ffff','#ff00ff','#ffff00','#39ff14','#ff7700'];
-const NUM_BALLS=40;
-let W,H,arena={x:50,y:90,w:0,h:0};
-let balls=[],particles=[],collisions=0,flash=0,last=performance.now();
+(function () {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
 
-function resize(){
-  W=canvas.width=window.innerWidth;
-  H=canvas.height=window.innerHeight;
-  arena.x=50;arena.y=90;
-  arena.w=W-100;arena.h=H-140;
-  for(const b of balls){
-    b.x=Math.max(arena.x+b.r,Math.min(arena.x+arena.w-b.r,b.x));
-    b.y=Math.max(arena.y+b.r,Math.min(arena.y+arena.h-b.r,b.y));
+  let W, H, play, balls = [], sparks = [], collisionCount = 0;
+  const BALL_COUNT = 40;
+  const COLORS = [
+    ['#ff4d4d', '#cc0000'],
+    ['#4d94ff', '#0052cc'],
+    ['#4dff88', '#00a844'],
+    ['#ffe14d', '#e6a800'],
+    ['#c44dff', '#7a00cc'],
+    ['#ff8a3d', '#cc5500'],
+    ['#ff4db8', '#cc0077'],
+    ['#4dffe0', '#00a89a'],
+    ['#a8ff4d', '#6acc00'],
+    ['#ff6b6b', '#d63031']
+  ];
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    const pad = Math.min(W, H) * 0.06;
+    play = {
+      x: pad,
+      y: pad,
+      w: W - pad * 2,
+      h: H - pad * 2,
+      r: 28
+    };
   }
-}
-window.addEventListener('resize',resize);
 
-function initBalls(){
-  balls.length=0;
-  for(let i=0;i<NUM_BALLS;i++){
-    const r=8+Math.random()*17;
-    let x,y,ok=false,tries=0;
-    while(!ok&&tries++<200){
-      x=arena.x+r+Math.random()*(arena.w-2*r);
-      y=arena.y+r+Math.random()*(arena.h-2*r);
-      ok=!balls.some(b=>Math.hypot(b.x-x,b.y-y)<b.r+r+3);
-    }
-    const ang=Math.random()*Math.PI*2;
-    const spd=1.5+Math.random()*3.5;
-    balls.push({
-      x,y,
-      vx:Math.cos(ang)*spd,
-      vy:Math.sin(ang)*spd,
-      r,mass:r*r,
-      color:COLORS[i%COLORS.length]
-    });
-  }
-}
+  function rand(a, b) { return a + Math.random() * (b - a); }
 
-function emitSparks(x,y,color){
-  const n=6+Math.floor(Math.random()*6);
-  for(let i=0;i<n;i++){
-    const a=Math.random()*Math.PI*2;
-    const s=1.5+Math.random()*5;
-    particles.push({
-      x,y,
-      vx:Math.cos(a)*s,
-      vy:Math.sin(a)*s,
-      life:1,
-      decay:0.025+Math.random()*0.03,
-      color,
-      size:1.5+Math.random()*2
-    });
-  }
-  if(particles.length>400)particles.splice(0,particles.length-400);
-}
-
-function resolveBallBall(a,b){
-  let dx=b.x-a.x,dy=b.y-a.y;
-  let dist=Math.hypot(dx,dy);
-  const minD=a.r+b.r;
-  if(dist>=minD||dist<1e-8)return false;
-  const nx=dx/dist,ny=dy/dist;
-  const overlap=minD-dist;
-  const invM=1/(a.mass+b.mass);
-  a.x-=nx*overlap*(b.mass*invM);
-  a.y-=ny*overlap*(b.mass*invM);
-  b.x+=nx*overlap*(a.mass*invM);
-  b.y+=ny*overlap*(a.mass*invM);
-  const dvx=a.vx-b.vx,dvy=a.vy-b.vy;
-  const vn=dvx*nx+dvy*ny;
-  if(vn>0)return false;
-  const j=-(1+1)*vn/(1/a.mass+1/b.mass);
-  a.vx+=(j/a.mass)*nx;
-  a.vy+=(j/a.mass)*ny;
-  b.vx-=(j/b.mass)*nx;
-  b.vy-=(j/b.mass)*ny;
-  return true;
-}
-
-function update(dt){
-  const steps=3;
-  const sdt=dt/steps;
-  for(let s=0;s<steps;s++){
-    for(const b of balls){
-      b.x+=b.vx*sdt;
-      b.y+=b.vy*sdt;
-      let hit=false;
-      if(b.x-b.r<arena.x){b.x=arena.x+b.r;if(b.vx<0){b.vx=-b.vx;hit=true;}}
-      else if(b.x+b.r>arena.x+arena.w){b.x=arena.x+arena.w-b.r;if(b.vx>0){b.vx=-b.vx;hit=true;}}
-      if(b.y-b.r<arena.y){b.y=arena.y+b.r;if(b.vy<0){b.vy=-b.vy;hit=true;}}
-      else if(b.y+b.r>arena.y+arena.h){b.y=arena.y+arena.h-b.r;if(b.vy>0){b.vy=-b.vy;hit=true;}}
-      if(hit){
-        collisions++;
-        emitSparks(
-          Math.max(arena.x,Math.min(arena.x+arena.w,b.x)),
-          Math.max(arena.y,Math.min(arena.y+arena.h,b.y)),
-          b.color
-        );
-        flash=Math.max(flash,0.35);
+  function createBalls() {
+    balls = [];
+    const minR = 10, maxR = 26;
+    let attempts = 0;
+    while (balls.length < BALL_COUNT && attempts < 2000) {
+      attempts++;
+      const r = rand(minR, maxR);
+      const x = rand(play.x + r + 4, play.x + play.w - r - 4);
+      const y = rand(play.y + r + 4, play.y + play.h - r - 4);
+      let ok = true;
+      for (const b of balls) {
+        const dx = x - b.x, dy = y - b.y;
+        if (dx * dx + dy * dy < (r + b.r + 3) * (r + b.r + 3)) { ok = false; break; }
       }
+      if (!ok) continue;
+      const col = COLORS[balls.length % COLORS.length];
+      const speed = rand(80, 220);
+      const ang = rand(0, Math.PI * 2);
+      balls.push({
+        x, y, r,
+        vx: Math.cos(ang) * speed,
+        vy: Math.sin(ang) * speed,
+        mass: r * r,
+        c0: col[0], c1: col[1],
+        squash: 0,
+        squashAng: 0
+      });
     }
-    for(let i=0;i<balls.length;i++){
-      for(let j=i+1;j<balls.length;j++){
-        if(resolveBallBall(balls[i],balls[j])){
-          collisions++;
-          const mx=(balls[i].x+balls[j].x)*0.5;
-          const my=(balls[i].y+balls[j].y)*0.5;
-          emitSparks(mx,my,Math.random()<0.5?balls[i].color:balls[j].color);
-          flash=Math.max(flash,0.45);
+  }
+
+  function spawnSparks(x, y, color) {
+    const n = 6 + (Math.random() * 5 | 0);
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, Math.PI * 2);
+      const sp = rand(60, 220);
+      sparks.push({
+        x, y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 1,
+        decay: rand(1.8, 3.2),
+        size: rand(2, 5),
+        color
+      });
+    }
+  }
+
+  function resolveBallBall(a, b) {
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    let dist = Math.sqrt(dx * dx + dy * dy);
+    const minDist = a.r + b.r;
+    if (dist === 0) {
+      dx = 0.01; dy = 0; dist = 0.01;
+    }
+    if (dist >= minDist) return false;
+
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // Separate to prevent overlap/sticking
+    const overlap = minDist - dist;
+    const totalMass = a.mass + b.mass;
+    const aPush = (b.mass / totalMass) * overlap;
+    const bPush = (a.mass / totalMass) * overlap;
+    a.x -= nx * aPush;
+    a.y -= ny * aPush;
+    b.x += nx * bPush;
+    b.y += ny * bPush;
+
+    // Relative velocity
+    const rvx = b.vx - a.vx;
+    const rvy = b.vy - a.vy;
+    const velAlongNormal = rvx * nx + rvy * ny;
+    if (velAlongNormal > 0) return false; // separating
+
+    // Elastic impulse (e = 1)
+    const e = 1;
+    const j = -(1 + e) * velAlongNormal / (1 / a.mass + 1 / b.mass);
+    const ix = j * nx;
+    const iy = j * ny;
+    a.vx -= ix / a.mass;
+    a.vy -= iy / a.mass;
+    b.vx += ix / b.mass;
+    b.vy += iy / b.mass;
+
+    // Juice
+    a.squash = 1;
+    b.squash = 1;
+    a.squashAng = Math.atan2(ny, nx);
+    b.squashAng = Math.atan2(-ny, -nx);
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    spawnSparks(mx, my, Math.random() < 0.5 ? a.c0 : b.c0);
+    return true;
+  }
+
+  function resolveWall(b) {
+    let hit = false;
+    const left = play.x + b.r;
+    const right = play.x + play.w - b.r;
+    const top = play.y + b.r;
+    const bottom = play.y + play.h - b.r;
+
+    if (b.x < left) {
+      b.x = left;
+      if (b.vx < 0) { b.vx = -b.vx; hit = true; b.squash = 1; b.squashAng = 0; }
+    } else if (b.x > right) {
+      b.x = right;
+      if (b.vx > 0) { b.vx = -b.vx; hit = true; b.squash = 1; b.squashAng = Math.PI; }
+    }
+    if (b.y < top) {
+      b.y = top;
+      if (b.vy < 0) { b.vy = -b.vy; hit = true; b.squash = 1; b.squashAng = Math.PI / 2; }
+    } else if (b.y > bottom) {
+      b.y = bottom;
+      if (b.vy > 0) { b.vy = -b.vy; hit = true; b.squash = 1; b.squashAng = -Math.PI / 2; }
+    }
+    if (hit) {
+      spawnSparks(b.x, b.y, b.c0);
+    }
+    return hit;
+  }
+
+  function update(dt) {
+    // Cap dt for stability
+    if (dt > 0.033) dt = 0.033;
+
+    // Substeps for numerical stability
+    const steps = 3;
+    const sdt = dt / steps;
+    for (let s = 0; s < steps; s++) {
+      for (const b of balls) {
+        b.x += b.vx * sdt;
+        b.y += b.vy * sdt;
+        if (resolveWall(b)) collisionCount++;
+      }
+      // Pairwise collisions
+      for (let i = 0; i < balls.length; i++) {
+        for (let j = i + 1; j < balls.length; j++) {
+          if (resolveBallBall(balls[i], balls[j])) collisionCount++;
         }
       }
     }
+
+    // Squash decay
+    for (const b of balls) {
+      if (b.squash > 0) {
+        b.squash = Math.max(0, b.squash - dt * 8);
+      }
+    }
+
+    // Sparks
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const p = sparks[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.96;
+      p.vy *= 0.96;
+      p.life -= p.decay * dt;
+      if (p.life <= 0) sparks.splice(i, 1);
+    }
   }
-  for(let i=particles.length-1;i>=0;i--){
-    const p=particles[i];
-    p.x+=p.vx*dt;
-    p.y+=p.vy*dt;
-    p.vx*=0.97;
-    p.vy*=0.97;
-    p.life-=p.decay*dt;
-    if(p.life<=0)particles.splice(i,1);
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
   }
-  flash*=Math.pow(0.88,dt);
-}
 
-function draw(){
-  ctx.fillStyle='#000';
-  ctx.fillRect(0,0,W,H);
+  function drawBackground() {
+    // Cheerful sky gradient
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#87CEEB');
+    g.addColorStop(0.45, '#B0E2FF');
+    g.addColorStop(0.75, '#FFE4A0');
+    g.addColorStop(1, '#FFD580');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
 
-  const vg=ctx.createRadialGradient(W*0.5,H*0.5,Math.min(W,H)*0.25,W*0.5,H*0.5,Math.max(W,H)*0.72);
-  vg.addColorStop(0,'rgba(0,0,0,0)');
-  vg.addColorStop(0.7,'rgba(0,0,0,0.15)');
-  vg.addColorStop(1,'rgba(0,0,0,0.65)');
-  ctx.fillStyle=vg;
-  ctx.fillRect(0,0,W,H);
+    // Soft decorative blobs
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(W * 0.15, H * 0.2, 80, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(W * 0.85, H * 0.15, 60, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(W * 0.7, H * 0.85, 100, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
 
-  ctx.save();
-  ctx.shadowBlur=28;
-  ctx.shadowColor='#00ffff';
-  ctx.strokeStyle='#00ffff';
-  ctx.lineWidth=5;
-  ctx.strokeRect(arena.x,arena.y,arena.w,arena.h);
-  ctx.shadowBlur=16;
-  ctx.shadowColor='#ff00ff';
-  ctx.strokeStyle='#ff00ff';
-  ctx.lineWidth=2;
-  ctx.strokeRect(arena.x+6,arena.y+6,arena.w-12,arena.h-12);
-  ctx.shadowBlur=10;
-  ctx.shadowColor='#39ff14';
-  ctx.strokeStyle='rgba(57,255,20,0.5)';
-  ctx.lineWidth=1;
-  ctx.strokeRect(arena.x+10,arena.y+10,arena.w-20,arena.h-20);
-  ctx.restore();
+  function drawFrame() {
+    const { x, y, w, h, r } = play;
+    const thick = 14;
 
-  for(const b of balls){
+    // Outer drop shadow
     ctx.save();
-    ctx.shadowBlur=22;
-    ctx.shadowColor=b.color;
-    ctx.fillStyle=b.color;
-    ctx.beginPath();
-    ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 8;
+    roundRect(x - thick, y - thick, w + thick * 2, h + thick * 2, r + 6);
+    ctx.fillStyle = '#ff6b9d';
     ctx.fill();
-    ctx.shadowBlur=0;
-    ctx.globalAlpha=0.55;
-    ctx.fillStyle='#ffffff';
-    ctx.beginPath();
-    ctx.arc(b.x-b.r*0.28,b.y-b.r*0.28,b.r*0.35,0,Math.PI*2);
+    ctx.restore();
+
+    // Bevel layers
+    // Outer rim
+    roundRect(x - thick, y - thick, w + thick * 2, h + thick * 2, r + 6);
+    const outerG = ctx.createLinearGradient(x, y - thick, x, y + h + thick);
+    outerG.addColorStop(0, '#ff8fab');
+    outerG.addColorStop(0.5, '#ff5c8a');
+    outerG.addColorStop(1, '#e6396b');
+    ctx.fillStyle = outerG;
     ctx.fill();
-    ctx.globalAlpha=0.25;
-    ctx.beginPath();
-    ctx.arc(b.x,b.y,b.r*0.7,0,Math.PI*2);
+
+    // Highlight edge top
+    ctx.save();
+    roundRect(x - thick + 3, y - thick + 3, w + thick * 2 - 6, h + thick * 2 - 6, r + 3);
+    ctx.clip();
+    const hi = ctx.createLinearGradient(0, y - thick, 0, y + 30);
+    hi.addColorStop(0, 'rgba(255,255,255,0.55)');
+    hi.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hi;
+    ctx.fillRect(x - thick, y - thick, w + thick * 2, 40);
+    ctx.restore();
+
+    // Inner dark bevel
+    roundRect(x - 5, y - 5, w + 10, h + 10, r);
+    ctx.fillStyle = '#c9184a';
     ctx.fill();
+
+    // Play area fill (soft)
+    roundRect(x, y, w, h, r - 4);
+    const pg = ctx.createLinearGradient(x, y, x, y + h);
+    pg.addColorStop(0, 'rgba(255,255,255,0.55)');
+    pg.addColorStop(1, 'rgba(255,255,255,0.25)');
+    ctx.fillStyle = pg;
+    ctx.fill();
+
+    // Clip play interior slightly for balls? we draw balls after and clamp physics
+  }
+
+  function drawBall(b) {
+    const sq = b.squash;
+    const scaleX = 1 + sq * 0.28;
+    const scaleY = 1 - sq * 0.22;
+
+    // Soft drop shadow
+    ctx.save();
+    ctx.translate(b.x + 3, b.y + 5);
+    ctx.scale(1.05, 0.55);
+    const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, b.r);
+    sg.addColorStop(0, 'rgba(0,0,0,0.28)');
+    sg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Ball body with squash
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(b.squashAng || 0);
+    ctx.scale(scaleX, scaleY);
+    ctx.rotate(-(b.squashAng || 0));
+
+    // Main radial gradient (glossy sphere)
+    const rg = ctx.createRadialGradient(-b.r * 0.3, -b.r * 0.35, b.r * 0.05, 0, 0, b.r);
+    rg.addColorStop(0, b.c0);
+    rg.addColorStop(0.65, b.c0);
+    rg.addColorStop(1, b.c1);
+    ctx.beginPath();
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = rg;
+    ctx.fill();
+
+    // Specular highlight top-left
+    const hg = ctx.createRadialGradient(-b.r * 0.35, -b.r * 0.4, 0, -b.r * 0.35, -b.r * 0.4, b.r * 0.55);
+    hg.addColorStop(0, 'rgba(255,255,255,0.9)');
+    hg.addColorStop(0.35, 'rgba(255,255,255,0.35)');
+    hg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.beginPath();
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = hg;
+    ctx.fill();
+
+    // Subtle rim light
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, b.r - 1, 0, Math.PI * 2);
+    ctx.stroke();
+
     ctx.restore();
   }
 
-  for(const p of particles){
+  function drawSparks() {
+    for (const p of sparks) {
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      // Star-ish sparkle
+      const s = p.size * (0.5 + p.life * 0.5);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.life * 6);
+      ctx.fillRect(-s, -s * 0.25, s * 2, s * 0.5);
+      ctx.fillRect(-s * 0.25, -s, s * 0.5, s * 2);
+      // Center glow
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHUD() {
+    const hw = 168, hh = 78;
+    const hx = play.x + 16;
+    const hy = play.y + 16;
+
+    // Drop shadow
     ctx.save();
-    ctx.globalAlpha=Math.max(0,p.life);
-    ctx.shadowBlur=10;
-    ctx.shadowColor=p.color;
-    ctx.fillStyle=p.color;
-    ctx.beginPath();
-    ctx.arc(p.x,p.y,p.size*p.life,0,Math.PI*2);
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetY = 5;
+    roundRect(hx, hy, hw, hh, 16);
+    ctx.fillStyle = '#fff3b0';
     ctx.fill();
     ctx.restore();
+
+    // Panel body
+    roundRect(hx, hy, hw, hh, 16);
+    const hg = ctx.createLinearGradient(hx, hy, hx, hy + hh);
+    hg.addColorStop(0, '#fff8d6');
+    hg.addColorStop(1, '#ffd166');
+    ctx.fillStyle = hg;
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = '#e09f3e';
+    ctx.lineWidth = 4;
+    roundRect(hx, hy, hw, hh, 16);
+    ctx.stroke();
+
+    // Inner highlight
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 2;
+    roundRect(hx + 3, hy + 3, hw - 6, hh - 6, 13);
+    ctx.stroke();
+
+    // Text — bold rounded cartoon style
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 15px "Comic Sans MS", "Chalkboard SE", "Arial Rounded MT Bold", Arial, sans-serif';
+
+    // Labels with soft shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillText('COLISOES', hx + 16, hy + 26 + 1);
+    ctx.fillStyle = '#d62828';
+    ctx.fillText('COLISOES', hx + 16, hy + 26);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillText('BOLAS', hx + 16, hy + 54 + 1);
+    ctx.fillStyle = '#0077b6';
+    ctx.fillText('BOLAS', hx + 16, hy + 54);
+
+    // Numbers
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 20px "Comic Sans MS", "Chalkboard SE", "Arial Rounded MT Bold", Arial, sans-serif';
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillText(String(collisionCount), hx + hw - 14, hy + 26 + 1);
+    ctx.fillStyle = '#9b2226';
+    ctx.fillText(String(collisionCount), hx + hw - 14, hy + 26);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.fillText(String(balls.length), hx + hw - 14, hy + 54 + 1);
+    ctx.fillStyle = '#023e8a';
+    ctx.fillText(String(balls.length), hx + hw - 14, hy + 54);
   }
-  ctx.globalAlpha=1;
-  ctx.shadowBlur=0;
 
-  if(flash>0.02){
-    ctx.fillStyle=`rgba(255,255,255,${flash*0.12})`;
-    ctx.fillRect(arena.x,arena.y,arena.w,arena.h);
+  function draw() {
+    drawBackground();
+    drawFrame();
+
+    // Clip balls to play area with rounded corners
+    ctx.save();
+    roundRect(play.x, play.y, play.w, play.h, play.r - 4);
+    ctx.clip();
+
+    for (const b of balls) drawBall(b);
+    drawSparks();
+
+    ctx.restore();
+
+    drawHUD();
   }
 
-  ctx.fillStyle='rgba(0,0,0,0.18)';
-  for(let y=0;y<H;y+=3)ctx.fillRect(0,y,W,1);
-  ctx.fillStyle='rgba(255,255,255,0.015)';
-  for(let y=1;y<H;y+=3)ctx.fillRect(0,y,W,1);
+  let last = performance.now();
+  function loop(now) {
+    const dt = (now - last) / 1000;
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
 
-  ctx.save();
-  ctx.shadowBlur=12;
-  ctx.shadowColor='#39ff14';
-  ctx.fillStyle='#39ff14';
-  ctx.font='bold 22px "Courier New",Courier,monospace';
-  ctx.fillText('◆ NEON COLLIDER ◆',18,32);
-  ctx.font='bold 14px "Courier New",Courier,monospace';
-  ctx.fillText('COLLISIONS  '+collisions,18,56);
-  ctx.fillText('BALLS       '+balls.length,18,76);
-  ctx.restore();
-}
+  window.addEventListener('resize', () => {
+    resize();
+    // Keep balls inside after resize
+    for (const b of balls) {
+      b.x = Math.max(play.x + b.r, Math.min(play.x + play.w - b.r, b.x));
+      b.y = Math.max(play.y + b.r, Math.min(play.y + play.h - b.r, b.y));
+    }
+  });
 
-function loop(now){
-  let dt=(now-last)/16.6667;
-  last=now;
-  if(dt>3)dt=3;
-  if(dt<0.05)dt=0.05;
-  update(dt);
-  draw();
+  resize();
+  createBalls();
   requestAnimationFrame(loop);
-}
-
-resize();
-initBalls();
-requestAnimationFrame(loop);
+})();
 </script>
 </body>
 </html>

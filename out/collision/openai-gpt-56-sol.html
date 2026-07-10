@@ -1,22 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Neon Collision Arena</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title></title>
 <style>
-html, body {
-  margin: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: #000;
-}
-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
+html,body{margin:0;width:100%;height:100%;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
 </style>
 </head>
 <body>
@@ -27,514 +17,477 @@ canvas {
 
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d");
-  const COLORS = ["#00ffff", "#ff00ff", "#ffff00", "#39ff14", "#ff7700"];
   const BALL_COUNT = 40;
-  const FIXED_STEP = 1 / 60;
+  const colors = [
+    ["#ff354f","#a90025"],
+    ["#38a9ff","#0758c9"],
+    ["#63df53","#168826"],
+    ["#ffd83d","#e58a00"],
+    ["#bd67ff","#6723bd"],
+    ["#ff9238","#d53e08"],
+    ["#35e6d3","#078b9d"],
+    ["#ff65ba","#b81272"]
+  ];
 
   let width = 0;
   let height = 0;
   let dpr = 1;
-  let arena = { left: 34, top: 92, right: 0, bottom: 0 };
+  let bounds = {};
   let balls = [];
-  let sparks = [];
-  let flashes = [];
+  let sparkles = [];
   let collisions = 0;
   let accumulator = 0;
   let previousTime = performance.now();
+  let contactPairs = new Set();
 
-  function random(min, max) {
-    return min + Math.random() * (max - min);
+  function roundedRect(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function updateBounds() {
+    const margin = Math.max(18, Math.min(34, width * 0.035, height * 0.045));
+    bounds.left = margin + 9;
+    bounds.top = margin + 9;
+    bounds.right = width - margin - 9;
+    bounds.bottom = height - margin - 9;
   }
 
   function resize() {
-    width = window.innerWidth;
-    height = window.innerHeight;
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-
-    canvas.width = Math.max(1, Math.round(width * dpr));
-    canvas.height = Math.max(1, Math.round(height * dpr));
+    const oldW = width || innerWidth;
+    const oldH = height || innerHeight;
+    width = innerWidth;
+    height = innerHeight;
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
     canvas.style.width = width + "px";
     canvas.style.height = height + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    updateBounds();
 
-    const margin = Math.max(24, Math.min(40, width * 0.04));
-    arena.left = margin;
-    arena.top = Math.max(88, margin);
-    arena.right = Math.max(arena.left + 120, width - margin);
-    arena.bottom = Math.max(arena.top + 120, height - margin);
-
-    initializeBalls();
-    sparks.length = 0;
-    flashes.length = 0;
-    collisions = 0;
+    if (!balls.length) {
+      createBalls();
+    } else {
+      const sx = width / oldW;
+      const sy = height / oldH;
+      for (const b of balls) {
+        b.x *= sx;
+        b.y *= sy;
+        b.x = Math.max(bounds.left + b.r, Math.min(bounds.right - b.r, b.x));
+        b.y = Math.max(bounds.top + b.r, Math.min(bounds.bottom - b.r, b.y));
+      }
+    }
   }
 
-  function initializeBalls() {
+  function createBalls() {
     balls = [];
-    const arenaWidth = arena.right - arena.left;
-    const arenaHeight = arena.bottom - arena.top;
-    const sizeScale = Math.min(1, Math.sqrt((arenaWidth * arenaHeight) / 500000));
+    const availableW = bounds.right - bounds.left;
+    const availableH = bounds.bottom - bounds.top;
+    const maxR = Math.max(8, Math.min(19, Math.min(availableW, availableH) / 18));
 
     for (let i = 0; i < BALL_COUNT; i++) {
-      let radius = random(7, 15) * Math.max(0.65, sizeScale);
+      let r = Math.max(7, maxR * (0.55 + Math.random() * 0.45));
       let x = 0;
       let y = 0;
-      let placed = false;
+      let valid = false;
 
-      for (let attempt = 0; attempt < 1500; attempt++) {
-        x = random(arena.left + radius + 3, arena.right - radius - 3);
-        y = random(arena.top + radius + 3, arena.bottom - radius - 3);
-
-        placed = balls.every(ball => {
-          const dx = x - ball.x;
-          const dy = y - ball.y;
-          const minDistance = radius + ball.r + 2;
-          return dx * dx + dy * dy >= minDistance * minDistance;
-        });
-
-        if (placed) break;
+      for (let attempt = 0; attempt < 1200 && !valid; attempt++) {
+        x = bounds.left + r + Math.random() * Math.max(1, availableW - r * 2);
+        y = bounds.top + r + Math.random() * Math.max(1, availableH - r * 2);
+        valid = balls.every(b => Math.hypot(x - b.x, y - b.y) > r + b.r + 2);
       }
 
-      if (!placed) {
-        radius = Math.max(5, radius * 0.75);
-        x = random(arena.left + radius, arena.right - radius);
-        y = random(arena.top + radius, arena.bottom - radius);
+      if (!valid) {
+        r = Math.max(5, r * 0.72);
+        x = bounds.left + r + Math.random() * Math.max(1, availableW - r * 2);
+        y = bounds.top + r + Math.random() * Math.max(1, availableH - r * 2);
       }
 
-      const angle = random(0, Math.PI * 2);
-      const speed = random(75, 175);
-
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 70 + Math.random() * 100;
       balls.push({
-        x,
-        y,
+        x, y, r,
+        mass: r * r,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        r: radius,
-        mass: radius * radius,
-        color: COLORS[i % COLORS.length]
+        color: colors[i % colors.length],
+        pulse: 0
       });
     }
 
-    separateAllBalls(20);
+    separateAll();
   }
 
-  function separateAllBalls(iterations) {
-    for (let iteration = 0; iteration < iterations; iteration++) {
+  function separateAll() {
+    for (let pass = 0; pass < 15; pass++) {
       for (let i = 0; i < balls.length; i++) {
-        const a = balls[i];
-
-        a.x = Math.max(arena.left + a.r, Math.min(arena.right - a.r, a.x));
-        a.y = Math.max(arena.top + a.r, Math.min(arena.bottom - a.r, a.y));
-
         for (let j = i + 1; j < balls.length; j++) {
+          const a = balls[i];
           const b = balls[j];
           let dx = b.x - a.x;
           let dy = b.y - a.y;
-          let distanceSquared = dx * dx + dy * dy;
-          const minimum = a.r + b.r;
+          let dist = Math.hypot(dx, dy);
+          const minDist = a.r + b.r + 0.2;
 
-          if (distanceSquared < minimum * minimum) {
-            if (distanceSquared < 0.000001) {
-              const angle = random(0, Math.PI * 2);
-              dx = Math.cos(angle);
-              dy = Math.sin(angle);
-              distanceSquared = 1;
+          if (dist < minDist) {
+            if (dist < 0.0001) {
+              dx = 1;
+              dy = 0;
+              dist = 1;
             }
-
-            const distance = Math.sqrt(distanceSquared);
-            const nx = dx / distance;
-            const ny = dy / distance;
-            const overlap = minimum - distance + 0.01;
-            const totalMass = a.mass + b.mass;
-
-            a.x -= nx * overlap * (b.mass / totalMass);
-            a.y -= ny * overlap * (b.mass / totalMass);
-            b.x += nx * overlap * (a.mass / totalMass);
-            b.y += ny * overlap * (a.mass / totalMass);
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const shift = (minDist - dist) / 2;
+            a.x -= nx * shift;
+            a.y -= ny * shift;
+            b.x += nx * shift;
+            b.y += ny * shift;
           }
         }
       }
     }
   }
 
-  function emitCollision(x, y, colorA, colorB, nx, ny, strength) {
-    collisions++;
-    const count = Math.min(12, 5 + Math.floor(strength / 45));
-
-    for (let i = 0; i < count; i++) {
-      const tangentX = -ny;
-      const tangentY = nx;
-      const direction = Math.random() < 0.5 ? 1 : -1;
-      const spread = random(-1.2, 1.2);
-      const speed = random(55, 175) + Math.min(strength, 180) * 0.35;
-      const dx = nx * direction + tangentX * spread;
-      const dy = ny * direction + tangentY * spread;
-      const length = Math.hypot(dx, dy) || 1;
-
-      sparks.push({
-        x,
-        y,
-        vx: dx / length * speed,
-        vy: dy / length * speed,
-        life: random(0.18, 0.42),
-        maxLife: 0,
-        color: Math.random() < 0.5 ? colorA : colorB,
-        size: random(1, 2.4)
-      });
-      sparks[sparks.length - 1].maxLife = sparks[sparks.length - 1].life;
-    }
-
-    flashes.push({
-      x,
-      y,
-      life: 0.12,
-      maxLife: 0.12,
-      radius: random(8, 15),
-      color: Math.random() < 0.5 ? colorA : colorB
-    });
-
-    if (sparks.length > 700) sparks.splice(0, sparks.length - 700);
-    if (flashes.length > 120) flashes.splice(0, flashes.length - 120);
-  }
-
-  function emitWallCollision(ball, x, y, nx, ny, strength) {
-    collisions++;
-    const count = 5;
-
-    for (let i = 0; i < count; i++) {
-      const tangentX = -ny;
-      const tangentY = nx;
-      const spread = random(-1.3, 1.3);
-      const dx = nx + tangentX * spread;
-      const dy = ny + tangentY * spread;
-      const length = Math.hypot(dx, dy) || 1;
-      const speed = random(65, 145) + Math.min(strength, 150) * 0.25;
-
-      sparks.push({
-        x,
-        y,
-        vx: dx / length * speed,
-        vy: dy / length * speed,
-        life: random(0.16, 0.35),
-        maxLife: 0,
-        color: ball.color,
-        size: random(1, 2.2)
-      });
-      sparks[sparks.length - 1].maxLife = sparks[sparks.length - 1].life;
-    }
-
-    flashes.push({
-      x,
-      y,
-      life: 0.1,
-      maxLife: 0.1,
-      radius: 10,
-      color: ball.color
+  function makeSparkle(x, y, color) {
+    sparkles.push({
+      x, y, color,
+      age: 0,
+      life: 0.24,
+      rotation: Math.random() * Math.PI
     });
   }
 
-  function resolveWalls(ball) {
-    if (ball.x - ball.r < arena.left) {
-      ball.x = arena.left + ball.r;
-      if (ball.vx < 0) {
-        const strength = Math.abs(ball.vx);
-        ball.vx = -ball.vx;
-        emitWallCollision(ball, arena.left, ball.y, 1, 0, strength);
-      }
-    } else if (ball.x + ball.r > arena.right) {
-      ball.x = arena.right - ball.r;
-      if (ball.vx > 0) {
-        const strength = Math.abs(ball.vx);
-        ball.vx = -ball.vx;
-        emitWallCollision(ball, arena.right, ball.y, -1, 0, strength);
-      }
-    }
-
-    if (ball.y - ball.r < arena.top) {
-      ball.y = arena.top + ball.r;
-      if (ball.vy < 0) {
-        const strength = Math.abs(ball.vy);
-        ball.vy = -ball.vy;
-        emitWallCollision(ball, ball.x, arena.top, 0, 1, strength);
-      }
-    } else if (ball.y + ball.r > arena.bottom) {
-      ball.y = arena.bottom - ball.r;
-      if (ball.vy > 0) {
-        const strength = Math.abs(ball.vy);
-        ball.vy = -ball.vy;
-        emitWallCollision(ball, ball.x, arena.bottom, 0, -1, strength);
-      }
-    }
+  function wallHit(ball, side) {
+    collisions++;
+    ball.pulse = 1;
+    let x = ball.x;
+    let y = ball.y;
+    if (side === 0) x = bounds.left;
+    if (side === 1) x = bounds.right;
+    if (side === 2) y = bounds.top;
+    if (side === 3) y = bounds.bottom;
+    makeSparkle(x, y, ball.color[0]);
   }
 
-  function resolveBallCollisions() {
+  function simulate(dt) {
+    for (const b of balls) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.pulse = Math.max(0, b.pulse - dt * 6);
+
+      if (b.x - b.r < bounds.left) {
+        b.x = bounds.left + b.r;
+        if (b.vx < 0) {
+          b.vx = -b.vx;
+          wallHit(b, 0);
+        }
+      }
+      if (b.x + b.r > bounds.right) {
+        b.x = bounds.right - b.r;
+        if (b.vx > 0) {
+          b.vx = -b.vx;
+          wallHit(b, 1);
+        }
+      }
+      if (b.y - b.r < bounds.top) {
+        b.y = bounds.top + b.r;
+        if (b.vy < 0) {
+          b.vy = -b.vy;
+          wallHit(b, 2);
+        }
+      }
+      if (b.y + b.r > bounds.bottom) {
+        b.y = bounds.bottom - b.r;
+        if (b.vy > 0) {
+          b.vy = -b.vy;
+          wallHit(b, 3);
+        }
+      }
+    }
+
+    const currentContacts = new Set();
+
     for (let i = 0; i < balls.length; i++) {
-      const a = balls[i];
-
       for (let j = i + 1; j < balls.length; j++) {
+        const a = balls[i];
         const b = balls[j];
         let dx = b.x - a.x;
         let dy = b.y - a.y;
-        const minimum = a.r + b.r;
-        let distanceSquared = dx * dx + dy * dy;
+        let distance = Math.hypot(dx, dy);
+        const minDistance = a.r + b.r;
 
-        if (distanceSquared > minimum * minimum) continue;
+        if (distance < minDistance) {
+          const key = i + ":" + j;
+          currentContacts.add(key);
 
-        if (distanceSquared < 0.000001) {
-          const angle = random(0, Math.PI * 2);
-          dx = Math.cos(angle);
-          dy = Math.sin(angle);
-          distanceSquared = 1;
+          if (distance < 0.00001) {
+            dx = 1;
+            dy = 0;
+            distance = 1;
+          }
+
+          const nx = dx / distance;
+          const ny = dy / distance;
+          const invA = 1 / a.mass;
+          const invB = 1 / b.mass;
+          const penetration = minDistance - distance;
+          const correction = penetration / (invA + invB);
+
+          a.x -= nx * correction * invA;
+          a.y -= ny * correction * invA;
+          b.x += nx * correction * invB;
+          b.y += ny * correction * invB;
+
+          const rvx = b.vx - a.vx;
+          const rvy = b.vy - a.vy;
+          const normalSpeed = rvx * nx + rvy * ny;
+
+          if (normalSpeed < 0) {
+            const impulse = -(2 * normalSpeed) / (invA + invB);
+            const ix = impulse * nx;
+            const iy = impulse * ny;
+
+            a.vx -= ix * invA;
+            a.vy -= iy * invA;
+            b.vx += ix * invB;
+            b.vy += iy * invB;
+
+            if (!contactPairs.has(key)) {
+              collisions++;
+              a.pulse = 1;
+              b.pulse = 1;
+              makeSparkle(
+                a.x + nx * a.r,
+                a.y + ny * a.r,
+                Math.random() < 0.5 ? a.color[0] : b.color[0]
+              );
+            }
+          }
         }
-
-        const distance = Math.sqrt(distanceSquared);
-        const nx = dx / distance;
-        const ny = dy / distance;
-        const overlap = minimum - distance;
-        const totalMass = a.mass + b.mass;
-
-        if (overlap > 0) {
-          const correction = overlap + 0.02;
-          a.x -= nx * correction * (b.mass / totalMass);
-          a.y -= ny * correction * (b.mass / totalMass);
-          b.x += nx * correction * (a.mass / totalMass);
-          b.y += ny * correction * (a.mass / totalMass);
-        }
-
-        const relativeVX = b.vx - a.vx;
-        const relativeVY = b.vy - a.vy;
-        const normalVelocity = relativeVX * nx + relativeVY * ny;
-
-        if (normalVelocity >= 0) continue;
-
-        const impulse = -(2 * normalVelocity) / (1 / a.mass + 1 / b.mass);
-        const impulseX = impulse * nx;
-        const impulseY = impulse * ny;
-
-        a.vx -= impulseX / a.mass;
-        a.vy -= impulseY / a.mass;
-        b.vx += impulseX / b.mass;
-        b.vy += impulseY / b.mass;
-
-        const contactX = a.x + nx * a.r;
-        const contactY = a.y + ny * a.r;
-        emitCollision(contactX, contactY, a.color, b.color, nx, ny, -normalVelocity);
       }
     }
-  }
 
-  function updateParticles(dt) {
-    for (let i = sparks.length - 1; i >= 0; i--) {
-      const spark = sparks[i];
-      spark.life -= dt;
+    contactPairs = currentContacts;
 
-      if (spark.life <= 0) {
-        sparks.splice(i, 1);
-        continue;
-      }
-
-      spark.x += spark.vx * dt;
-      spark.y += spark.vy * dt;
-      spark.vx *= Math.pow(0.08, dt);
-      spark.vy *= Math.pow(0.08, dt);
-    }
-
-    for (let i = flashes.length - 1; i >= 0; i--) {
-      flashes[i].life -= dt;
-      if (flashes[i].life <= 0) flashes.splice(i, 1);
+    for (let i = sparkles.length - 1; i >= 0; i--) {
+      sparkles[i].age += dt;
+      if (sparkles[i].age >= sparkles[i].life) sparkles.splice(i, 1);
     }
   }
 
-  function update(dt) {
-    let maxSpeed = 0;
-    let minimumRadius = Infinity;
-
-    for (const ball of balls) {
-      maxSpeed = Math.max(maxSpeed, Math.hypot(ball.vx, ball.vy));
-      minimumRadius = Math.min(minimumRadius, ball.r);
-    }
-
-    const required = Math.ceil((maxSpeed * dt) / Math.max(2, minimumRadius * 0.45));
-    const substeps = Math.max(2, Math.min(10, required));
-    const subDt = dt / substeps;
-
-    for (let step = 0; step < substeps; step++) {
-      for (const ball of balls) {
-        ball.x += ball.vx * subDt;
-        ball.y += ball.vy * subDt;
-        resolveWalls(ball);
-      }
-
-      resolveBallCollisions();
-
-      for (const ball of balls) resolveWalls(ball);
-    }
-
-    updateParticles(dt);
-  }
-
-  function drawArena() {
-    ctx.save();
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "#00ffff";
-    ctx.lineWidth = 5;
-    ctx.shadowColor = "#00ffff";
-    ctx.shadowBlur = 18;
-    ctx.strokeRect(
-      arena.left,
-      arena.top,
-      arena.right - arena.left,
-      arena.bottom - arena.top
-    );
-
-    ctx.strokeStyle = "#ff00ff";
-    ctx.lineWidth = 2;
-    ctx.shadowColor = "#ff00ff";
-    ctx.shadowBlur = 8;
-    ctx.strokeRect(
-      arena.left + 5,
-      arena.top + 5,
-      arena.right - arena.left - 10,
-      arena.bottom - arena.top - 10
-    );
-    ctx.restore();
-  }
-
-  function drawBalls() {
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-
-    for (const ball of balls) {
-      ctx.beginPath();
-      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
-      ctx.fillStyle = ball.color;
-      ctx.shadowColor = ball.color;
-      ctx.shadowBlur = 18;
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  function drawEffects() {
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    ctx.lineCap = "round";
-
-    for (const flash of flashes) {
-      const alpha = flash.life / flash.maxLife;
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = flash.color;
-      ctx.lineWidth = 2.5;
-      ctx.shadowColor = flash.color;
-      ctx.shadowBlur = 14;
-      ctx.beginPath();
-      ctx.arc(
-        flash.x,
-        flash.y,
-        flash.radius * (1.4 - alpha * 0.4),
-        0,
-        Math.PI * 2
-      );
-      ctx.stroke();
-    }
-
-    for (const spark of sparks) {
-      const alpha = spark.life / spark.maxLife;
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = spark.color;
-      ctx.lineWidth = spark.size;
-      ctx.shadowColor = spark.color;
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.moveTo(spark.x, spark.y);
-      ctx.lineTo(
-        spark.x - spark.vx * 0.025,
-        spark.y - spark.vy * 0.025
-      );
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-
-  function drawHud() {
-    ctx.save();
-    ctx.fillStyle = "#39ff14";
-    ctx.shadowColor = "#39ff14";
-    ctx.shadowBlur = 9;
-    ctx.textBaseline = "top";
-    ctx.font = "bold 20px monospace";
-    ctx.fillText("NEON COLLISION", 18, 14);
-
-    ctx.font = "bold 14px monospace";
-    ctx.fillText("COLLISIONS  " + String(collisions).padStart(8, "0"), 18, 43);
-    ctx.fillText("BALLS       " + String(balls.length).padStart(8, "0"), 18, 62);
-    ctx.restore();
-  }
-
-  function drawScanlines() {
-    ctx.save();
-    ctx.globalAlpha = 0.12;
-    ctx.fillStyle = "#8aff8a";
-
-    for (let y = 0; y < height; y += 4) {
-      ctx.fillRect(0, y, width, 1);
-    }
-
-    ctx.restore();
-  }
-
-  function drawVignette() {
-    const gradient = ctx.createRadialGradient(
-      width * 0.5,
-      height * 0.5,
-      Math.min(width, height) * 0.2,
-      width * 0.5,
-      height * 0.5,
-      Math.max(width, height) * 0.72
-    );
-    gradient.addColorStop(0, "rgba(0,0,0,0)");
-    gradient.addColorStop(0.72, "rgba(0,0,0,0.08)");
-    gradient.addColorStop(1, "rgba(0,0,0,0.58)");
-
-    ctx.save();
-    ctx.fillStyle = gradient;
+  function drawBackground() {
+    const bg = ctx.createLinearGradient(0, 0, width, height);
+    bg.addColorStop(0, "#52c9ff");
+    bg.addColorStop(0.48, "#9eeaff");
+    bg.addColorStop(1, "#fff0a8");
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, width, height);
+
+    ctx.globalAlpha = 0.13;
+    ctx.fillStyle = "#ffffff";
+    for (let y = 12; y < height; y += 42) {
+      for (let x = (Math.floor(y / 42) % 2) * 22; x < width; x += 44) {
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawFrame() {
+    const x = bounds.left - 9;
+    const y = bounds.top - 9;
+    const w = bounds.right - bounds.left + 18;
+    const h = bounds.bottom - bounds.top + 18;
+
+    ctx.save();
+    ctx.shadowColor = "rgba(20,70,100,0.42)";
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetY = 7;
+    roundedRect(x, y, w, h, 22);
+    ctx.fillStyle = "#ff8c28";
+    ctx.fill();
     ctx.restore();
+
+    roundedRect(x, y, w, h, 22);
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = "#e55319";
+    ctx.stroke();
+
+    roundedRect(x + 4, y + 4, w - 8, h - 8, 18);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "#ffd85a";
+    ctx.stroke();
+
+    roundedRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top, 12);
+    ctx.fillStyle = "rgba(255,255,255,0.13)";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.stroke();
+  }
+
+  function drawBall(b) {
+    const p = Math.sin(b.pulse * Math.PI);
+    const sx = 1 + p * 0.11;
+    const sy = 1 - p * 0.09;
+
+    ctx.save();
+    ctx.globalAlpha = 0.24;
+    ctx.fillStyle = "#183b55";
+    ctx.beginPath();
+    ctx.ellipse(b.x + 2, b.y + b.r * 0.84, b.r * 0.82, b.r * 0.28, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.scale(sx, sy);
+
+    const sphere = ctx.createRadialGradient(
+      -b.r * 0.38, -b.r * 0.42, b.r * 0.08,
+      0, 0, b.r
+    );
+    sphere.addColorStop(0, "#ffffff");
+    sphere.addColorStop(0.14, b.color[0]);
+    sphere.addColorStop(0.7, b.color[0]);
+    sphere.addColorStop(1, b.color[1]);
+
+    ctx.fillStyle = sphere;
+    ctx.beginPath();
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.82;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.ellipse(-b.r * 0.34, -b.r * 0.39, b.r * 0.2, b.r * 0.13, -0.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(b.r * 0.22, b.r * 0.2, b.r * 0.65, 0.1, 1.45);
+    ctx.lineTo(0, 0);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSparkles() {
+    for (const s of sparkles) {
+      const t = s.age / s.life;
+      const size = 4 + t * 10;
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rotation);
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2.4 * (1 - t * 0.5);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-size, 0);
+      ctx.lineTo(size, 0);
+      ctx.moveTo(0, -size);
+      ctx.lineTo(0, size);
+      ctx.stroke();
+
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(-size * 0.55, -size * 0.55);
+      ctx.lineTo(size * 0.55, size * 0.55);
+      ctx.moveTo(size * 0.55, -size * 0.55);
+      ctx.lineTo(-size * 0.55, size * 0.55);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHUD() {
+    const x = bounds.left + 14;
+    const y = bounds.top + 14;
+    const w = Math.min(176, Math.max(142, width * 0.2));
+    const h = 70;
+
+    ctx.save();
+    ctx.shadowColor = "rgba(32,50,90,0.4)";
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 5;
+    roundedRect(x, y, w, h, 16);
+    ctx.fillStyle = "#7346cf";
+    ctx.fill();
+    ctx.restore();
+
+    roundedRect(x, y, w, h, 16);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "#4a258e";
+    ctx.stroke();
+
+    roundedRect(x + 4, y + 4, w - 8, h - 8, 12);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#c9a8ff";
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#442077";
+    ctx.lineWidth = 3;
+    ctx.lineJoin = "round";
+    ctx.font = "bold 16px 'Arial Rounded MT Bold', Arial, sans-serif";
+    ctx.textBaseline = "middle";
+
+    const line1 = "COLISOES  " + collisions;
+    const line2 = "BOLAS     " + balls.length;
+    ctx.strokeText(line1, x + 14, y + 23);
+    ctx.fillText(line1, x + 14, y + 23);
+    ctx.strokeText(line2, x + 14, y + 48);
+    ctx.fillText(line2, x + 14, y + 48);
   }
 
   function render() {
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, width, height);
+    drawBackground();
+    drawFrame();
 
-    drawArena();
-    drawEffects();
-    drawBalls();
-    drawHud();
-    drawScanlines();
-    drawVignette();
+    ctx.save();
+    roundedRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top, 12);
+    ctx.clip();
+    for (const b of balls) drawBall(b);
+    drawSparkles();
+    ctx.restore();
+
+    drawHUD();
   }
 
   function frame(now) {
-    const elapsed = Math.min(0.1, (now - previousTime) / 1000);
+    const elapsed = Math.min(0.05, (now - previousTime) / 1000);
     previousTime = now;
     accumulator += elapsed;
 
-    while (accumulator >= FIXED_STEP) {
-      update(FIXED_STEP);
-      accumulator -= FIXED_STEP;
+    const step = 1 / 120;
+    let iterations = 0;
+    while (accumulator >= step && iterations < 8) {
+      simulate(step);
+      accumulator -= step;
+      iterations++;
     }
 
     render();
     requestAnimationFrame(frame);
   }
 
-  window.addEventListener("resize", resize);
+  addEventListener("resize", resize);
   resize();
   requestAnimationFrame(frame);
 })();

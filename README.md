@@ -29,11 +29,11 @@ Every model gets the **same prompt** (temperature 0.6, seed 42, one shot) with a
 | Fluid (water) | Particle-based SPH fluid, sloshing in a container |
 | Throwing objects | Projectile motion + collisions + stacking |
 | Ship on waves | Buoyancy + wave motion |
-| Collisions | Elastic collisions + momentum/energy transfer (retro early-2000s arcade styling) |
+| Collisions | Elastic collisions + momentum/energy transfer (mid-2000s Flash-game styling, clickjogos/ojogos) |
 
 ## Preview
 
-### Collisions (early-2000s arcade vibe)
+### Collisions (mid-2000s Flash-game vibe)
 ![Collisions](assets/collision.png)
 
 ### Spinning hexagon

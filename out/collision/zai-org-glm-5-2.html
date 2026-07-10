@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>NEON ARENA</title>
+<title>Colisões - Bolhas Saltitantes</title>
 <style>
-  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; height: 100%; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #5fb8ff; }
   canvas { display: block; }
 </style>
 </head>
@@ -12,159 +13,376 @@
 <canvas id="c"></canvas>
 <script>
 (function () {
+  'use strict';
+
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
 
   let W = 0, H = 0;
-  let arena = { x: 0, y: 0, w: 0, h: 0 };
-
-  // Neon arcade palette
-  const PALETTE = ['#00ffff', '#ff00ff', '#ffff00', '#39ff14', '#ff7700'];
+  let playX, playY, playW, playH;
+  const FRAME = 22;
   const BALL_COUNT = 40;
 
-  let balls = [];
-  let sparks = [];
-  let flashes = [];
-  let collisions = 0;
+  // Bright cartoon palette for marbles
+  const PALETTE = [
+    { a: '#ff5757', b: '#b81f1f' }, // red
+    { a: '#5fb8ff', b: '#1a6cc4' }, // blue
+    { a: '#5dd66c', b: '#1f8a2e' }, // green
+    { a: '#ffd23d', b: '#c7950a' }, // yellow
+    { a: '#c66bff', b: '#7a2bc4' }, // purple
+    { a: '#ff9a3d', b: '#c25a0a' }, // orange
+    { a: '#ff5fb0', b: '#c41f7a' }, // pink
+    { a: '#3dd6d6', b: '#1f8a8a' }  // cyan
+  ];
 
-  // Pre-rendered scanline strip (cached for performance)
-  const scan = document.createElement('canvas');
-  scan.width = 1;
-  scan.height = 3;
-  {
-    const sctx = scan.getContext('2d');
-    sctx.fillStyle = 'rgba(0,0,0,0.35)';
-    sctx.fillRect(0, 0, 1, 1);
+  // Pre-rendered gradient per ball (cached for performance)
+  let gradCache = [];
+  function buildGrads() {
+    gradCache = balls.map(b => {
+      const g = ctx.createRadialGradient(
+        b.x - b.r * 0.35, b.y - b.r * 0.35, b.r * 0.05,
+        b.x, b.y, b.r
+      );
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(0.18, b.col.a);
+      g.addColorStop(0.85, b.col.b);
+      g.addColorStop(1, b.col.b);
+      return g;
+    });
   }
+
+  let balls = [];
+  let collisions = 0;
+  let particles = [];
 
   function resize() {
     W = canvas.width = window.innerWidth;
     H = canvas.height = window.innerHeight;
-    const marginX = Math.max(40, W * 0.06);
-    const marginY = Math.max(110, H * 0.14);
-    arena = {
-      x: marginX,
-      y: marginY,
-      w: W - marginX * 2,
-      h: H - marginY * 2
-    };
-    // Clamp any balls that ended up outside the new arena
+    const pad = 24;
+    const maxW = 1100;
+    const maxH = 720;
+    playW = Math.min(maxW, W - pad * 2);
+    playH = Math.min(maxH, H - pad * 2);
+    playX = Math.round((W - playW) / 2);
+    playY = Math.round((H - playH) / 2);
+    // Clamp balls inside new bounds
     for (const b of balls) {
-      b.x = Math.max(arena.x + b.r, Math.min(arena.x + arena.w - b.r, b.x));
-      b.y = Math.max(arena.y + b.r, Math.min(arena.y + arena.h - b.r, b.y));
+      b.x = Math.max(playX + b.r + 2, Math.min(playX + playW - b.r - 2, b.x));
+      b.y = Math.max(playY + b.r + 2, Math.min(playY + playH - b.r - 2, b.y));
+    }
+    buildGrads();
+  }
+  window.addEventListener('resize', resize);
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function initBalls() {
+    balls = [];
+    const minR = 14, maxR = 34;
+    let attempts = 0;
+    while (balls.length < BALL_COUNT && attempts < 6000) {
+      attempts++;
+      const r = rand(minR, maxR);
+      const x = rand(playX + r + 4, playX + playW - r - 4);
+      const y = rand(playY + r + 4, playY + playH - r - 4);
+      let ok = true;
+      for (const o of balls) {
+        const dx = x - o.x, dy = y - o.y;
+        if (dx * dx + dy * dy < (r + o.r + 4) * (r + o.r + 4)) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const speed = rand(110, 220);
+      const ang = rand(0, Math.PI * 2);
+      balls.push({
+        x, y, r,
+        vx: Math.cos(ang) * speed,
+        vy: Math.sin(ang) * speed,
+        col: PALETTE[(Math.random() * PALETTE.length) | 0],
+        squash: 0,
+        sqAng: 0
+      });
+    }
+    buildGrads();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+  }
+
+  function drawBackground() {
+    // Cheerful sky gradient
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#7ec8ff');
+    g.addColorStop(0.55, '#a8dbff');
+    g.addColorStop(1, '#d6efff');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // Soft playful clouds
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    const t = performance.now() * 0.000015;
+    for (let i = 0; i < 6; i++) {
+      const cx = ((i * 240 + t * 60) % (W + 240)) - 120;
+      const cy = 60 + i * 38 + Math.sin(i * 1.3) * 12;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+      ctx.arc(cx + 22, cy + 4, 18, 0, Math.PI * 2);
+      ctx.arc(cx - 22, cy + 6, 16, 0, Math.PI * 2);
+      ctx.arc(cx + 4, cy - 10, 14, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
-  function rand(a, b) { return a + Math.random() * (b - a); }
-  function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
+  function drawFrame() {
+    // Outer drop shadow
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.28)';
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 8;
+    ctx.fillStyle = '#2a6fc4';
+    roundRect(playX - FRAME, playY - FRAME, playW + FRAME * 2, playH + FRAME * 2, FRAME + 8);
+    ctx.fill();
+    ctx.restore();
 
-  function makeBall() {
-    let r = rand(8, 22);
-    let x, y, ok, tries = 0;
-    do {
-      x = arena.x + r + Math.random() * (arena.w - r * 2);
-      y = arena.y + r + Math.random() * (arena.h - r * 2);
-      ok = true;
-      for (const o of balls) {
-        const dx = o.x - x, dy = o.y - y;
-        if (dx * dx + dy * dy < (o.r + r + 2) * (o.r + r + 2)) { ok = false; break; }
-      }
-      tries++;
-    } while (!ok && tries < 200);
-    const ang = Math.random() * Math.PI * 2;
-    const speed = rand(120, 260);
-    return {
-      x, y,
-      vx: Math.cos(ang) * speed,
-      vy: Math.sin(ang) * speed,
-      r,
-      color: pick(PALETTE),
-      trail: []
-    };
+    // Bevel: dark outer ring
+    ctx.strokeStyle = '#154a8a';
+    ctx.lineWidth = 4;
+    roundRect(playX - FRAME + 4, playY - FRAME + 4, playW + FRAME * 2 - 8, playH + FRAME * 2 - 8, FRAME + 4);
+    ctx.stroke();
+
+    // Bright top-left highlight
+    ctx.strokeStyle = '#bfe2ff';
+    ctx.lineWidth = 3;
+    roundRect(playX - FRAME + 2, playY - FRAME + 2, playW + FRAME * 2 - 4, playH + FRAME * 2 - 4, FRAME + 6);
+    ctx.stroke();
+
+    // Inner play-area inset shadow
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.22)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 3;
+    ctx.fillStyle = '#eaf7ff';
+    roundRect(playX, playY, playW, playH, 14);
+    ctx.fill();
+    ctx.restore();
+
+    // Inner subtle border
+    ctx.strokeStyle = '#9fd0ee';
+    ctx.lineWidth = 2;
+    roundRect(playX + 1, playY + 1, playW - 2, playH - 2, 13);
+    ctx.stroke();
   }
 
-  function init() {
-    resize();
-    balls = [];
-    sparks = [];
-    flashes = [];
-    collisions = 0;
-    for (let i = 0; i < BALL_COUNT; i++) balls.push(makeBall());
+  function drawBall(b, i) {
+    const g = gradCache[i];
+    if (!g) return;
+
+    // Drop shadow beneath ball
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.20)';
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y + b.r * 0.85, b.r * 0.95, b.r * 0.28, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Squash transform
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    if (b.squash > 0.001) {
+      const sx = 1 + b.squash * 0.28;
+      const sy = 1 - b.squash * 0.28;
+      ctx.rotate(b.sqAng);
+      ctx.scale(sx, sy);
+      ctx.rotate(-b.sqAng);
+    }
+    ctx.translate(-b.x, -b.y);
+
+    // Body
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rim shading (bottom-right)
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r - 0.75, Math.PI * 0.15, Math.PI * 0.85);
+    ctx.stroke();
+
+    // Specular highlight (top-left)
+    const hr = b.r * 0.42;
+    const hg = ctx.createRadialGradient(
+      b.x - b.r * 0.38, b.y - b.r * 0.38, 0,
+      b.x - b.r * 0.38, b.y - b.r * 0.38, hr
+    );
+    hg.addColorStop(0, 'rgba(255,255,255,0.95)');
+    hg.addColorStop(0.55, 'rgba(255,255,255,0.35)');
+    hg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hg;
+    ctx.beginPath();
+    ctx.arc(b.x - b.r * 0.38, b.y - b.r * 0.38, hr, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tiny sharp glint
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.beginPath();
+    ctx.arc(b.x - b.r * 0.5, b.y - b.r * 0.5, b.r * 0.12, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
   }
 
-  function emitSparks(x, y, color, n) {
-    n = n || 6;
+  function drawParticles() {
+    for (const p of particles) {
+      const a = p.life / p.maxLife;
+      ctx.fillStyle = 'rgba(255,255,255,' + (a * 0.95).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * a + 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      // cross sparkle
+      ctx.strokeStyle = 'rgba(255,255,255,' + (a * 0.7).toFixed(3) + ')';
+      ctx.lineWidth = 1.2;
+      const s = p.r * a * 2.4;
+      ctx.beginPath();
+      ctx.moveTo(p.x - s, p.y); ctx.lineTo(p.x + s, p.y);
+      ctx.moveTo(p.x, p.y - s); ctx.lineTo(p.x, p.y + s);
+      ctx.stroke();
+    }
+  }
+
+  function drawHUD() {
+    const pw = 200, ph = 96;
+    const px = 20, py = 20;
+
+    // Shadow
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetY = 6;
+    ctx.fillStyle = '#ffce3d';
+    roundRect(px, py, pw, ph, 16);
+    ctx.fill();
+    ctx.restore();
+
+    // Bevel dark
+    ctx.strokeStyle = '#c7950a';
+    ctx.lineWidth = 3;
+    roundRect(px + 1.5, py + 1.5, pw - 3, ph - 3, 14);
+    ctx.stroke();
+    // Bevel light
+    ctx.strokeStyle = '#fff3b0';
+    ctx.lineWidth = 2;
+    roundRect(px + 3, py + 3, pw - 6, ph - 6, 12);
+    ctx.stroke();
+
+    // Inner panel
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    roundRect(px + 8, py + 8, pw - 16, ph - 16, 10);
+    ctx.fill();
+
+    // Text
+    ctx.fillStyle = '#5a3a05';
+    ctx.font = 'bold 14px "Trebuchet MS", "Verdana", sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+
+    ctx.fillText('COLISOES', px + 16, py + 30);
+    ctx.fillStyle = '#b81f1f';
+    ctx.font = 'bold 26px "Trebuchet MS", "Verdana", sans-serif';
+    ctx.fillText(String(collisions), px + 110, py + 30);
+
+    ctx.fillStyle = '#5a3a05';
+    ctx.font = 'bold 14px "Trebuchet MS", "Verdana", sans-serif';
+    ctx.fillText('BOLAS', px + 16, py + 68);
+    ctx.fillStyle = '#1f6a2e';
+    ctx.font = 'bold 26px "Trebuchet MS", "Verdana", sans-serif';
+    ctx.fillText(String(balls.length), px + 110, py + 68);
+  }
+
+  function spawnSparkle(x, y, n) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const s = rand(60, 220);
-      sparks.push({
+      const s = rand(40, 140);
+      particles.push({
         x, y,
         vx: Math.cos(a) * s,
         vy: Math.sin(a) * s,
-        life: rand(0.25, 0.55),
-        maxLife: 0.55,
-        color
+        r: rand(1.5, 3.5),
+        life: rand(0.25, 0.5),
+        maxLife: 0.5
       });
     }
   }
 
-  function emitFlash(x, y, color, size) {
-    flashes.push({ x, y, color, life: 0.18, maxLife: 0.18, size: size || 16 });
-  }
-
   function step(dt) {
-    // Move
+    // Integrate
     for (const b of balls) {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
+      if (b.squash > 0) b.squash = Math.max(0, b.squash - dt * 5.5);
+    }
 
-      // Walls — reflect, never tunnel
-      if (b.x - b.r < arena.x) {
-        b.x = arena.x + b.r;
-        b.vx = Math.abs(b.vx);
-        emitSparks(b.x - b.r * 0.4, b.y, b.color, 4);
-        emitFlash(arena.x + 2, b.y, b.color, b.r * 1.6);
-        collisions++;
-      } else if (b.x + b.r > arena.x + arena.w) {
-        b.x = arena.x + arena.w - b.r;
-        b.vx = -Math.abs(b.vx);
-        emitSparks(b.x + b.r * 0.4, b.y, b.color, 4);
-        emitFlash(arena.x + arena.w - 2, b.y, b.color, b.r * 1.6);
-        collisions++;
+    // Walls (reflect + clamp to prevent tunneling)
+    for (const b of balls) {
+      if (b.x - b.r < playX) {
+        b.x = playX + b.r;
+        if (b.vx < 0) {
+          b.vx = -b.vx;
+          b.squash = 1; b.sqAng = 0;
+          spawnSparkle(playX + 2, b.y, 3);
+        }
+      } else if (b.x + b.r > playX + playW) {
+        b.x = playX + playW - b.r;
+        if (b.vx > 0) {
+          b.vx = -b.vx;
+          b.squash = 1; b.sqAng = 0;
+          spawnSparkle(playX + playW - 2, b.y, 3);
+        }
       }
-      if (b.y - b.r < arena.y) {
-        b.y = arena.y + b.r;
-        b.vy = Math.abs(b.vy);
-        emitSparks(b.x, b.y - b.r * 0.4, b.color, 4);
-        emitFlash(b.x, arena.y + 2, b.color, b.r * 1.6);
-        collisions++;
-      } else if (b.y + b.r > arena.y + arena.h) {
-        b.y = arena.y + arena.h - b.r;
-        b.vy = -Math.abs(b.vy);
-        emitSparks(b.x, b.y + b.r * 0.4, b.color, 4);
-        emitFlash(b.x, arena.y + arena.h - 2, b.color, b.r * 1.6);
-        collisions++;
+      if (b.y - b.r < playY) {
+        b.y = playY + b.r;
+        if (b.vy < 0) {
+          b.vy = -b.vy;
+          b.squash = 1; b.sqAng = Math.PI / 2;
+          spawnSparkle(b.x, playY + 2, 3);
+        }
+      } else if (b.y + b.r > playY + playH) {
+        b.y = playY + playH - b.r;
+        if (b.vy > 0) {
+          b.vy = -b.vy;
+          b.squash = 1; b.sqAng = Math.PI / 2;
+          spawnSparkle(b.x, playY + playH - 2, 3);
+        }
       }
-
-      // Trail
-      b.trail.push(b.x, b.y);
-      if (b.trail.length > 36) b.trail.splice(0, b.trail.length - 36);
     }
 
     // Ball-ball elastic collisions
-    for (let i = 0; i < balls.length; i++) {
+    const n = balls.length;
+    for (let i = 0; i < n; i++) {
       const a = balls[i];
-      for (let j = i + 1; j < balls.length; j++) {
+      for (let j = i + 1; j < n; j++) {
         const b = balls[j];
         const dx = b.x - a.x;
         const dy = b.y - a.y;
-        const d2 = dx * dx + dy * dy;
         const minD = a.r + b.r;
-        if (d2 < minD * minD && d2 > 0.000001) {
+        const d2 = dx * dx + dy * dy;
+        if (d2 < minD * minD && d2 > 0.0001) {
           const d = Math.sqrt(d2);
           const nx = dx / d;
           const ny = dy / d;
-          // Separate (prevent overlap/stick)
+          // Separate proportionally to radius
           const overlap = (minD - d) * 0.5;
           a.x -= nx * overlap;
           a.y -= ny * overlap;
@@ -175,161 +393,34 @@
           const rvy = b.vy - a.vy;
           const vn = rvx * nx + rvy * ny;
           if (vn < 0) {
-            // Equal mass elastic: swap normal components
-            a.vx += vn * nx;
-            a.vy += vn * ny;
-            b.vx -= vn * nx;
-            b.vy -= vn * ny;
+            // Equal mass elastic exchange of normal component
+            const imp = vn;
+            a.vx += imp * nx;
+            a.vy += imp * ny;
+            b.vx -= imp * nx;
+            b.vy -= imp * ny;
+            // Juice
             const cx = (a.x + b.x) * 0.5;
             const cy = (a.y + b.y) * 0.5;
-            emitSparks(cx, cy, a.color, 3);
-            emitSparks(cx, cy, b.color, 3);
-            emitFlash(cx, cy, '#ffffff', (a.r + b.r) * 0.9);
+            const ang = Math.atan2(ny, nx);
+            a.squash = 1; a.sqAng = ang;
+            b.squash = 1; b.sqAng = ang;
+            spawnSparkle(cx, cy, 5);
             collisions++;
           }
         }
       }
     }
 
-    // Sparks
-    for (let i = sparks.length - 1; i >= 0; i--) {
-      const s = sparks[i];
-      s.x += s.vx * dt;
-      s.y += s.vy * dt;
-      s.vx *= 0.92;
-      s.vy *= 0.92;
-      s.life -= dt;
-      if (s.life <= 0) sparks.splice(i, 1);
+    // Particles
+    for (const p of particles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.92;
+      p.vy *= 0.92;
+      p.life -= dt;
     }
-
-    // Flashes
-    for (let i = flashes.length - 1; i >= 0; i--) {
-      flashes[i].life -= dt;
-      if (flashes[i].life <= 0) flashes.splice(i, 1);
-    }
-  }
-
-  function draw() {
-    // Solid black background (no gradients)
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, W, H);
-
-    // Arena interior subtle floor tint
-    ctx.fillStyle = 'rgba(8, 6, 18, 1)';
-    ctx.fillRect(arena.x, arena.y, arena.w, arena.h);
-
-    // Neon border with additive glow halo
-    ctx.save();
-    ctx.shadowBlur = 24;
-    ctx.shadowColor = '#00ffff';
-    ctx.strokeStyle = '#00ffff';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(arena.x, arena.y, arena.w, arena.h);
-    ctx.restore();
-
-    // Inner crisp border line
-    ctx.strokeStyle = 'rgba(180, 255, 255, 0.85)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(arena.x, arena.y, arena.w, arena.h);
-
-    // Motion trails (additive)
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const b of balls) {
-      const t = b.trail;
-      if (t.length < 4) continue;
-      ctx.strokeStyle = b.color;
-      ctx.globalAlpha = 0.28;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(t[0], t[1]);
-      for (let i = 2; i < t.length; i += 2) ctx.lineTo(t[i], t[i + 1]);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // Sparks (additive)
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const s of sparks) {
-      const a = Math.max(0, s.life / s.maxLife);
-      ctx.globalAlpha = a;
-      ctx.fillStyle = s.color;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = s.color;
-      ctx.fillRect(s.x - 1.5, s.y - 1.5, 3, 3);
-    }
-    ctx.restore();
-
-    // Flashes (additive)
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const f of flashes) {
-      const a = Math.max(0, f.life / f.maxLife);
-      const rad = f.size * (1.4 - a * 0.4);
-      ctx.globalAlpha = a * 0.7;
-      ctx.fillStyle = f.color;
-      ctx.shadowBlur = 18;
-      ctx.shadowColor = f.color;
-      ctx.beginPath();
-      ctx.arc(f.x, f.y, rad, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Balls with additive glow halos
-    ctx.save();
-    for (const b of balls) {
-      ctx.shadowBlur = 22;
-      ctx.shadowColor = b.color;
-      ctx.fillStyle = b.color;
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Inner bright cores (additive)
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const b of balls) {
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
-      ctx.beginPath();
-      ctx.arc(b.x - b.r * 0.28, b.y - b.r * 0.28, b.r * 0.32, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // CRT scanlines overlay
-    ctx.save();
-    ctx.globalAlpha = 0.5;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(scan, 0, 0, W, H);
-    ctx.restore();
-
-    // Vignette (radial darkening at edges)
-    ctx.save();
-    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
-
-    // HUD — chunky glowing green
-    ctx.save();
-    ctx.textBaseline = 'top';
-    ctx.font = 'bold 22px "Courier New", monospace';
-    ctx.shadowBlur = 14;
-    ctx.shadowColor = '#39ff14';
-    ctx.fillStyle = '#39ff14';
-    ctx.fillText('NEON ARENA', 18, 18);
-
-    ctx.font = 'bold 14px "Courier New", monospace';
-    ctx.shadowBlur = 8;
-    ctx.fillText('COLLISIONS  : ' + collisions, 18, 50);
-    ctx.fillText('BALLS       : ' + balls.length, 18, 70);
-    ctx.restore();
+    particles = particles.filter(p => p.life > 0);
   }
 
   let last = performance.now();
@@ -337,16 +428,23 @@
     let dt = (now - last) / 1000;
     last = now;
     if (dt > 0.05) dt = 0.05; // clamp for stability
-    // Sub-step for stability with fast small balls
+    // Sub-step for accuracy with fast small balls
     const sub = 2;
     const sdt = dt / sub;
-    for (let i = 0; i < sub; i++) step(sdt);
-    draw();
+    for (let s = 0; s < sub; s++) step(sdt);
+
+    drawBackground();
+    drawFrame();
+    for (let i = 0; i < balls.length; i++) drawBall(balls[i], i);
+    drawParticles();
+    drawHUD();
+
     requestAnimationFrame(loop);
   }
 
-  window.addEventListener('resize', resize);
-  init();
+  // Boot
+  resize();
+  initBalls();
   requestAnimationFrame(loop);
 })();
 </script>
