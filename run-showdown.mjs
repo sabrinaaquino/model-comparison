@@ -135,6 +135,20 @@ const TASKS = [
       "particles — floats on the surface with buoyancy: it rides up and down and pitches/tilts to follow the wave height and slope directly beneath " +
       "it, rocking like a real boat. Dark background. Keep it stable — the ship stays on the water surface and never sinks away or flies off.",
   },
+  {
+    id: "collision",
+    label: "Collisions",
+    physics: "Elastic collisions — momentum + energy (retro)",
+    prompt:
+      `${COMMON} IGNORE the minimal ball/line/background style rules above — this event has a deliberately RETRO early-2000s arcade look, ` +
+      "described here. The simulation: about 40 balls of varying sizes bounce inside a rectangular arena and collide ELASTICALLY with each other " +
+      "and the walls, with correct momentum and energy transfer (conserve total energy; balls must never overlap-stick or tunnel through walls). " +
+      "Early-2000s game vibe: pure black background with a subtle CRT scanline overlay (faint horizontal lines) and a slight vignette; draw a thick " +
+      "glowing neon border around the arena. Render each ball as a solid disc from a bright neon arcade palette (#00ffff cyan, #ff00ff magenta, " +
+      "#ffff00 yellow, #39ff14 lime, #ff7700 orange) with an additive glow halo (shadowBlur + shadowColor). On each collision emit a small burst of " +
+      "spark particles and a brief flash. Show a chunky retro HUD in a monospace/pixel font glowing green (#39ff14) at the top-left: a bold title, a " +
+      "'COLLISIONS' counter, and the ball count. Keep it smooth at 60fps and numerically stable.",
+  },
 ];
 
 function extractHtml(text) {

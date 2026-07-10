@@ -2,7 +2,7 @@
 
 Same prompt, four frontier models, side by side.
 
-Each model is asked — one-shot, with identical parameters — to write a self-contained physics simulation, and their outputs are rendered together in a 2×2 grid so you can watch all four run at the same time. Across **8 physics events**, only the physics differs between cells; the visual styling is pinned so the comparison is fair.
+Each model is asked — one-shot, with identical parameters — to write a self-contained physics simulation, and their outputs are rendered together in a 2×2 grid so you can watch all four run at the same time. Across **9 physics events**, only the physics differs between cells; the visual styling is pinned so the comparison is fair.
 
 Every generation runs through the [Venice API](https://venice.ai).
 
@@ -29,8 +29,12 @@ Every model gets the **same prompt** (temperature 0.6, seed 42, one shot) with a
 | Fluid (water) | Particle-based SPH fluid, sloshing in a container |
 | Throwing objects | Projectile motion + collisions + stacking |
 | Ship on waves | Buoyancy + wave motion |
+| Collisions | Elastic collisions + momentum/energy transfer (retro early-2000s arcade styling) |
 
 ## Preview
+
+### Collisions (early-2000s arcade vibe)
+![Collisions](assets/collision.png)
 
 ### Spinning hexagon
 ![Spinning hexagon](assets/hexagon.png)
@@ -79,7 +83,7 @@ On Windows PowerShell:
 $env:VENICE_KEY = 'your_key'; node run-showdown.mjs --task=hexagon
 ```
 
-Valid `--task` values: `hexagon`, `pendulum`, `particles`, `orbits`, `cloth`, `fluid`, `throwing`, `ship`.
+Valid `--task` values: `hexagon`, `pendulum`, `particles`, `orbits`, `cloth`, `fluid`, `throwing`, `ship`, `collision`.
 Outputs are written to `out/<event>/<model-id>.html` — one self-contained HTML file per cell.
 
 ## How it works

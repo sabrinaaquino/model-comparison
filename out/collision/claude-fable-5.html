@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+"use strict";
+var canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+var W=0,H=0,AX=0,AY=0,AW=0,AH=0,M=28;
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+  AX=M;AY=M;AW=W-2*M;AH=H-2*M;
+  buildOverlay();
+  clampBalls();
+}
+window.addEventListener('resize',resize);
+
+var PALETTE=['#00ffff','#ff00ff','#ffff00','#39ff14','#ff7700'];
+var NBALLS=40;
+var balls=[],particles=[],flashes=[];
+var collisionCount=0;
+
+function rand(a,b){return a+Math.random()*(b-a);}
+
+function initBalls(){
+  balls=[];
+  var tries=0;
+  while(balls.length<NBALLS&&tries<20000){
+    tries++;
+    var r=rand(8,20);
+    var x=rand(AX+r+2,AX+AW-r-2);
+    var y=rand(AY+r+2,AY+AH-r-2);
+    var ok=true;
+    for(var i=0;i<balls.length;i++){
+      var b=balls[i],dx=b.x-x,dy=b.y-y;
+      if(dx*dx+dy*dy<(b.r+r+2)*(b.r+r+2)){ok=false;break;}
+    }
+    if(!ok)continue;
+    var sp=rand(80,260),an=rand(0,Math.PI*2);
+    balls.push({x:x,y:y,vx:Math.cos(an)*sp,vy:Math.sin(an)*sp,r:r,m:r*r,c:PALETTE[balls.length%PALETTE.length]});
+  }
+}
+
+function clampBalls(){
+  for(var i=0;i<balls.length;i++){
+    var b=balls[i];
+    if(b.x<AX+b.r)b.x=AX+b.r;
+    if(b.x>AX+AW-b.r)b.x=AX+AW-b.r;
+    if(b.y<AY+b.r)b.y=AY+b.r;
+    if(b.y>AY+AH-b.r)b.y=AY+AH-b.r;
+  }
+}
+
+function spawnSparks(x,y,color,power){
+  var n=6+Math.floor(power*4);
+  if(n>12)n=12;
+  for(var i=0;i<n;i++){
+    var a=rand(0,Math.PI*2),s=rand(60,220);
+    particles.push({x:x,y:y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rand(0.2,0.45),t:0,c:color});
+  }
+  flashes.push({x:x,y:y,t:0,life:0.12,c:color});
+}
+
+function step(dt){
+  var i,j,b;
+  for(i=0;i<balls.length;i++){
+    b=balls[i];
+    b.x+=b.vx*dt;
+    b.y+=b.vy*dt;
+    // walls
+    if(b.x-b.r<AX){b.x=AX+b.r;if(b.vx<0){b.vx=-b.vx;collisionCount++;spawnSparks(AX,b.y,b.c,1);}}
+    else if(b.x+b.r>AX+AW){b.x=AX+AW-b.r;if(b.vx>0){b.vx=-b.vx;collisionCount++;spawnSparks(AX+AW,b.y,b.c,1);}}
+    if(b.y-b.r<AY){b.y=AY+b.r;if(b.vy<0){b.vy=-b.vy;collisionCount++;spawnSparks(b.x,AY,b.c,1);}}
+    else if(b.y+b.r>AY+AH){b.y=AY+AH-b.r;if(b.vy>0){b.vy=-b.vy;collisionCount++;spawnSparks(b.x,AY+AH,b.c,1);}}
+  }
+  // pairwise elastic collisions
+  for(i=0;i<balls.length;i++){
+    var a=balls[i];
+    for(j=i+1;j<balls.length;j++){
+      var c=balls[j];
+      var dx=c.x-a.x,dy=c.y-a.y;
+      var rs=a.r+c.r;
+      var d2=dx*dx+dy*dy;
+      if(d2<rs*rs&&d2>1e-9){
+        var d=Math.sqrt(d2),nx=dx/d,ny=dy/d;
+        // positional separation (mass-weighted) to prevent overlap-stick
+        var overlap=rs-d;
+        var tot=a.m+c.m;
+        a.x-=nx*overlap*(c.m/tot);
+        a.y-=ny*overlap*(c.m/tot);
+        c.x+=nx*overlap*(a.m/tot);
+        c.y+=ny*overlap*(a.m/tot);
+        // relative normal velocity
+        var rvn=(c.vx-a.vx)*nx+(c.vy-a.vy)*ny;
+        if(rvn<0){
+          // perfectly elastic impulse
+          var imp=-2*rvn/(1/a.m+1/c.m);
+          a.vx-=imp*nx/a.m;
+          a.vy-=imp*ny/a.m;
+          c.vx+=imp*nx/c.m;
+          c.vy+=imp*ny/c.m;
+          collisionCount++;
+          var cx=a.x+nx*a.r,cy=a.y+ny*a.r;
+          spawnSparks(cx,cy,Math.random()<0.5?a.c:c.c,Math.min(3,-rvn/120));
+        }
+      }
+    }
+  }
+  // particles
+  for(i=particles.length-1;i>=0;i--){
+    var p=particles[i];
+    p.t+=dt;
+    if(p.t>=p.life){particles.splice(i,1);continue;}
+    p.x+=p.vx*dt;p.y+=p.vy*dt;
+    p.vx*=0.96;p.vy*=0.96;
+  }
+  for(i=flashes.length-1;i>=0;i--){
+    flashes[i].t+=dt;
+    if(flashes[i].t>=flashes[i].life)flashes.splice(i,1);
+  }
+}
+
+// pre-rendered scanline + vignette overlay for speed
+var overlay=document.createElement('canvas');
+function buildOverlay(){
+  overlay.width=W;overlay.height=H;
+  var o=overlay.getContext('2d');
+  o.clearRect(0,0,W,H);
+  o.fillStyle='rgba(0,0,0,0.18)';
+  for(var y=0;y<H;y+=4){o.fillRect(0,y,W,2);}
+  var g=o.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35,W/2,H/2,Math.max(W,H)*0.75);
+  g.addColorStop(0,'rgba(0,0,0,0)');
+  g.addColorStop(1,'rgba(0,0,0,0.55)');
+  o.fillStyle=g;
+  o.fillRect(0,0,W,H);
+}
+
+function draw(){
+  ctx.fillStyle='#000000';
+  ctx.fillRect(0,0,W,H);
+
+  // neon arena border (thick, glowing)
+  ctx.save();
+  ctx.lineWidth=6;
+  ctx.strokeStyle='#00ffff';
+  ctx.shadowBlur=25;
+  ctx.shadowColor='#00ffff';
+  ctx.strokeRect(AX,AY,AW,AH);
+  ctx.lineWidth=2;
+  ctx.strokeStyle='#ffffff';
+  ctx.shadowBlur=10;
+  ctx.strokeRect(AX,AY,AW,AH);
+  ctx.restore();
+
+  // balls with additive glow
+  ctx.save();
+  ctx.globalCompositeOperation='lighter';
+  for(var i=0;i<balls.length;i++){
+    var b=balls[i];
+    ctx.shadowBlur=18;
+    ctx.shadowColor=b.c;
+    ctx.fillStyle=b.c;
+    ctx.beginPath();
+    ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+    ctx.fill();
+  }
+  // sparks
+  for(i=0;i<particles.length;i++){
+    var p=particles[i];
+    var k=1-p.t/p.life;
+    ctx.globalAlpha=k;
+    ctx.shadowBlur=8;
+    ctx.shadowColor=p.c;
+    ctx.fillStyle=p.c;
+    ctx.fillRect(p.x-1.5,p.y-1.5,3,3);
+  }
+  ctx.globalAlpha=1;
+  // flashes
+  for(i=0;i<flashes.length;i++){
+    var f=flashes[i];
+    var fk=1-f.t/f.life;
+    ctx.globalAlpha=fk*0.8;
+    ctx.shadowBlur=20;
+    ctx.shadowColor='#ffffff';
+    ctx.fillStyle='#ffffff';
+    ctx.beginPath();
+    ctx.arc(f.x,f.y,6+(1-fk)*10,0,Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // HUD
+  ctx.save();
+  ctx.shadowBlur=12;
+  ctx.shadowColor='#39ff14';
+  ctx.fillStyle='#39ff14';
+  ctx.font='bold 22px monospace';
+  ctx.textBaseline='top';
+  ctx.fillText('*** NEON BOUNCE ***',14,12);
+  ctx.font='bold 14px monospace';
+  ctx.fillText('COLLISIONS: '+collisionCount,14,42);
+  ctx.fillText('BALLS: '+balls.length,14,60);
+  ctx.restore();
+
+  // CRT overlay
+  ctx.drawImage(overlay,0,0);
+}
+
+var last=performance.now();
+function frame(now){
+  var dt=(now-last)/1000;
+  last=now;
+  if(dt>0.05)dt=0.05;
+  // substeps for stability / anti-tunneling
+  var sub=4,h=dt/sub;
+  for(var s=0;s<sub;s++)step(h);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+resize();
+initBalls();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
