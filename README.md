@@ -29,12 +29,12 @@ Every model gets the **same prompt** (temperature 0.6, seed 42, one shot) with a
 | Fluid (water) | Particle-based SPH fluid, sloshing in a container |
 | Throwing objects | Projectile motion + collisions + stacking |
 | Ship on waves | Buoyancy + wave motion |
-| Collisions | Elastic collisions + momentum/energy transfer (mid-2000s Flash-game styling, clickjogos/ojogos) |
+| Car crash | Two cartoon cars launch off ramps and collide head-on in mid-air — projectile arcs + collision recoil (mid-2000s Flash-game styling, clickjogos/ojogos) |
 
 ## Preview
 
-### Collisions (mid-2000s Flash-game vibe)
-![Collisions](assets/collision.png)
+### Car crash (mid-2000s Flash-game vibe)
+![Car crash](assets/collision.png)
 
 ### Spinning hexagon
 ![Spinning hexagon](assets/hexagon.png)

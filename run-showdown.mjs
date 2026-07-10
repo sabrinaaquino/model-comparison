@@ -18,7 +18,7 @@ if (!KEY) {
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
 const MODELS = [
-  { id: "claude-fable-5", label: "Claude Fable 5" },
+  { id: "claude-fable-5", label: "Claude Fable 5", maxTokens: 32000 },
   { id: "openai-gpt-56-sol", label: "GPT-5.6 Sol" },
   // GLM 5.2 thinks at length; give it headroom and cap reasoning effort so
   // the answer isn't swallowed by the thinking budget.
@@ -137,18 +137,17 @@ const TASKS = [
   },
   {
     id: "collision",
-    label: "Collisions",
-    physics: "Elastic collisions — momentum + energy (Flash-game look)",
+    label: "Car crash",
+    physics: "Two-car stunt collision — projectiles + impact",
     prompt:
-      `${COMMON} IGNORE the minimal ball/line/background style rules above — this event uses a colorful mid-2000s 2D FLASH-GAME look (think ` +
-      "casual browser games from portals like clickjogos / ojogos), described here. The simulation: about 40 glossy balls of varying sizes bounce " +
-      "inside a play area and collide ELASTICALLY with each other and the walls, with correct momentum and energy transfer (conserve energy; no " +
-      "overlap-sticking or wall tunneling). Flash-game vibe: a bright, cheerful background — a soft gradient (e.g. sky-blue to light) or a playful " +
-      "colorful gradient, NOT black. Render each ball as a glossy 3D-looking sphere: a radial gradient in a bright cartoon color (reds, blues, " +
-      "greens, yellows, purples, oranges) with a white specular highlight near the top-left and a soft drop shadow beneath it, so it looks like a " +
-      "shiny marble/bubble. Give the play area a thick, rounded, colorful beveled frame. Draw a chunky rounded HUD panel (drop shadow, bold rounded " +
-      "cartoon font) in a corner showing \"COLISOES\" (collision count) and \"BOLAS\" (ball count). Add juice: a quick squash/pop and a small " +
-      "sparkle on each collision. Keep it smooth at 60fps and numerically stable.",
+      `${COMMON} IGNORE the minimal ball/line/background style rules above — this event uses a colorful mid-2000s 2D FLASH-GAME look (like the ` +
+      "stunt/car games on portals such as clickjogos / ojogos), described here. Scene: TWO cartoon cars race up ramps from opposite sides, launch " +
+      "into the air off the ramps (projectile motion under gravity), and COLLIDE head-on in mid-air — a single dramatic crash. On impact apply " +
+      "momentum transfer so the cars recoil and spin, and spawn a burst of debris particles, sparks, and a cartoon flash/star. After the cars fall " +
+      "and settle, reset and repeat the run so it loops continuously. Flash-game vibe: a bright blue gradient sky, green grassy ramps/hills with a " +
+      "bit of dirt, and two glossy cartoon cars (e.g. a red one and a blue one) with a rounded body, windows, and spinning wheels, each with a soft " +
+      "drop shadow. Add juice: squash/stretch on launch and impact, a dust puff off the ramps, and sparkles on the crash. Keep it smooth at 60fps " +
+      "and physically believable (correct arcs, gravity, and collision recoil).",
   },
 ];
 
@@ -165,30 +164,26 @@ async function runCell(task, model) {
   const t0 = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12 * 60 * 1000);
+  const url = "https://api.venice.ai/api/v1/chat/completions";
+  const headers = { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" };
+  const baseBody = {
+    model: model.id,
+    messages: [{ role: "user", content: task.prompt }],
+    temperature: 0.6,
+    seed: 42,
+    max_completion_tokens: model.maxTokens ?? 16000,
+    ...((effortOverride || model.reasoningEffort) ? { reasoning_effort: effortOverride || model.reasoningEffort } : {}),
+    venice_parameters: { strip_thinking_response: true, include_venice_system_prompt: false },
+  };
+
   try {
-    const res = await fetch("https://api.venice.ai/api/v1/chat/completions", {
+    // Primary path: stream so long generations keep the socket alive (a plain
+    // non-streaming request over ~5 min gets its connection cut = "fetch failed").
+    const res = await fetch(url, {
       method: "POST",
       signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: model.id,
-        messages: [{ role: "user", content: task.prompt }],
-        temperature: 0.6,
-        seed: 42,
-        max_completion_tokens: model.maxTokens ?? 16000,
-        ...((effortOverride || model.reasoningEffort) ? { reasoning_effort: effortOverride || model.reasoningEffort } : {}),
-        // Stream so long generations keep the socket alive (non-streaming
-        // requests over ~5 min get their connection cut = "fetch failed").
-        stream: true,
-        stream_options: { include_usage: true },
-        venice_parameters: {
-          strip_thinking_response: true,
-          include_venice_system_prompt: false,
-        },
-      }),
+      headers,
+      body: JSON.stringify({ ...baseBody, stream: true, stream_options: { include_usage: true } }),
     });
     if (!res.ok) {
       const body = await res.text();
@@ -216,12 +211,30 @@ async function runCell(task, model) {
         } catch { /* ignore keep-alive / partial lines */ }
       }
     }
+    let html = extractHtml(raw);
+    let via = "stream";
+
+    // Fallback: some models/prompts don't deliver content over the stream when
+    // thinking is stripped (heavy reasoning). A non-streaming call returns the
+    // whole message in one shot.
+    if (!/<html/i.test(html)) {
+      const res2 = await fetch(url, { method: "POST", signal: controller.signal, headers, body: JSON.stringify({ ...baseBody, stream: false }) });
+      if (!res2.ok) {
+        const body = await res2.text();
+        throw new Error(`HTTP ${res2.status} (non-stream): ${body.slice(0, 500)}`);
+      }
+      const j2 = await res2.json();
+      raw = j2.choices?.[0]?.message?.content ?? "";
+      usage = j2.usage ?? usage;
+      html = extractHtml(raw);
+      via = "non-stream";
+    }
+
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
-    const html = extractHtml(raw);
     if (!/<html/i.test(html)) throw new Error(`No <html> found in output (${raw.length} chars) after ${secs}s`);
     await writeFile(join(outDir, `${model.id}.html`), html, "utf8");
     console.log(
-      `[ok]   ${task.id.padEnd(10)} ${model.label.padEnd(16)} ${secs}s  out=${usage.completion_tokens ?? "?"}`
+      `[ok]   ${task.id.padEnd(10)} ${model.label.padEnd(16)} ${secs}s  out=${usage.completion_tokens ?? "?"}  (${via})`
     );
     return { ok: true };
   } catch (err) {
