@@ -136,18 +136,15 @@ const TASKS = [
       "it, rocking like a real boat. Dark background. Keep it stable — the ship stays on the water surface and never sinks away or flies off.",
   },
   {
-    id: "collision",
-    label: "Car crash",
-    physics: "Two-car stunt collision — projectiles + impact",
+    id: "donut",
+    label: "Donut",
+    physics: "3D rendering — rotating torus + shading",
     prompt:
-      `${COMMON} IGNORE the minimal ball/line/background style rules above — this event uses a colorful mid-2000s 2D FLASH-GAME look (like the ` +
-      "stunt/car games on portals such as clickjogos / ojogos), described here. Scene: TWO cartoon cars race up ramps from opposite sides, launch " +
-      "into the air off the ramps (projectile motion under gravity), and COLLIDE head-on in mid-air — a single dramatic crash. On impact apply " +
-      "momentum transfer so the cars recoil and spin, and spawn a burst of debris particles, sparks, and a cartoon flash/star. After the cars fall " +
-      "and settle, reset and repeat the run so it loops continuously. Flash-game vibe: a bright blue gradient sky, green grassy ramps/hills with a " +
-      "bit of dirt, and two glossy cartoon cars (e.g. a red one and a blue one) with a rounded body, windows, and spinning wheels, each with a soft " +
-      "drop shadow. Add juice: squash/stretch on launch and impact, a dust puff off the ramps, and sparkles on the crash. Keep it smooth at 60fps " +
-      "and physically believable (correct arcs, gravity, and collision recoil).",
+      `${COMMON} The program shows the classic spinning 3D donut (torus) rendered as ASCII characters — an homage to Andy Sloane's donut.c. ` +
+      "Compute the torus surface in 3D, rotate it continuously about two axes, apply simple Lambert shading from a fixed light source, and map each " +
+      "surface point's brightness to the ASCII luminance ramp \".,-~:;=!*#$@\" using a z-buffer so nearer points win. This is an ASCII render, so " +
+      "ignore the ball/line rules above: draw the characters in a monospace font, color #e6e6e6 on the #0b0b0d background (no other colors), " +
+      "centered and filling a good portion of the canvas. Keep it smooth at 60fps.",
   },
 ];
 

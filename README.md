@@ -29,12 +29,12 @@ Every model gets the **same prompt** (temperature 0.6, seed 42, one shot) with a
 | Fluid (water) | Particle-based SPH fluid, sloshing in a container |
 | Throwing objects | Projectile motion + collisions + stacking |
 | Ship on waves | Buoyancy + wave motion |
-| Car crash | Two cartoon cars launch off ramps and collide head-on in mid-air — projectile arcs + collision recoil (mid-2000s Flash-game styling, clickjogos/ojogos) |
+| Donut | The classic spinning 3D ASCII donut (donut.c homage) — rotating torus with luminance shading + z-buffer |
 
 ## Preview
 
-### Car crash (mid-2000s Flash-game vibe)
-![Car crash](assets/collision.png)
+### Spinning donut (donut.c homage)
+![Donut](assets/donut.png)
 
 ### Spinning hexagon
 ![Spinning hexagon](assets/hexagon.png)
@@ -83,7 +83,7 @@ On Windows PowerShell:
 $env:VENICE_KEY = 'your_key'; node run-showdown.mjs --task=hexagon
 ```
 
-Valid `--task` values: `hexagon`, `pendulum`, `particles`, `orbits`, `cloth`, `fluid`, `throwing`, `ship`, `collision`.
+Valid `--task` values: `hexagon`, `pendulum`, `particles`, `orbits`, `cloth`, `fluid`, `throwing`, `ship`, `donut`.
 Outputs are written to `out/<event>/<model-id>.html` — one self-contained HTML file per cell.
 
 ## How it works

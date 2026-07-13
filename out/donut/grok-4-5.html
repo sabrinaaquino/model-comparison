@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W,H,cols,rows,fontSize,charWidth,charHeight,offsetX,offsetY,K1;
+const chars=".,-~:;=!*#$@";
+const R1=1,R2=2,K2=5;
+let A=0,B=0;
+
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+  fontSize=Math.max(8,Math.min(18,Math.floor(Math.min(W,H)/35)));
+  ctx.font=fontSize+'px monospace';
+  charWidth=ctx.measureText('M').width;
+  charHeight=fontSize;
+  cols=Math.max(50,Math.min(140,Math.floor(W*0.82/charWidth)));
+  rows=Math.max(18,Math.min(60,Math.floor(H*0.72/charHeight)));
+  offsetX=(W-cols*charWidth)/2;
+  offsetY=(H-rows*charHeight)/2;
+  K1=cols*K2*3/(8*(R1+R2));
+}
+window.addEventListener('resize',resize);
+resize();
+
+function frame(){
+  const output=new Array(cols*rows).fill(' ');
+  const zbuffer=new Array(cols*rows).fill(0);
+  const cosA=Math.cos(A),sinA=Math.sin(A);
+  const cosB=Math.cos(B),sinB=Math.sin(B);
+  for(let theta=0;theta<6.2832;theta+=0.07){
+    const costheta=Math.cos(theta),sintheta=Math.sin(theta);
+    for(let phi=0;phi<6.2832;phi+=0.02){
+      const cosphi=Math.cos(phi),sinphi=Math.sin(phi);
+      const circlex=R2+R1*costheta;
+      const circley=R1*sintheta;
+      const x=circlex*(cosB*cosphi+sinA*sinB*sinphi)-circley*cosA*sinB;
+      const y=circlex*(sinB*cosphi-sinA*cosB*sinphi)+circley*cosA*cosB;
+      const z=K2+cosA*circlex*sinphi+circley*sinA;
+      const ooz=1/z;
+      const xp=Math.floor(cols/2+K1*ooz*x);
+      const yp=Math.floor(rows/2-K1*ooz*y);
+      const L=cosphi*costheta*sinB-cosA*costheta*sinphi-sinA*sintheta+cosB*(cosA*sintheta-costheta*sinA*sinphi);
+      if(L>0){
+        if(xp>=0&&xp<cols&&yp>=0&&yp<rows){
+          const idx=xp+yp*cols;
+          if(ooz>zbuffer[idx]){
+            zbuffer[idx]=ooz;
+            let li=Math.floor(L*8);
+            if(li>11)li=11;
+            output[idx]=chars[li];
+          }
+        }
+      }
+    }
+  }
+  ctx.fillStyle='#0b0b0d';
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#e6e6e6';
+  ctx.font=fontSize+'px monospace';
+  ctx.textBaseline='top';
+  for(let y=0;y<rows;y++){
+    let line='';
+    for(let x=0;x<cols;x++)line+=output[x+y*cols];
+    ctx.fillText(line,offsetX,offsetY+y*charHeight);
+  }
+  A+=0.04;
+  B+=0.02;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var RAMP = ".,-~:;=!*#$@";
+
+  // ASCII grid dimensions
+  var COLS = 80;
+  var ROWS = 44;
+
+  var A = 0, B = 0;
+
+  var output = new Array(COLS * ROWS);
+  var zbuf = new Float32Array(COLS * ROWS);
+
+  var R1 = 1;      // tube radius
+  var R2 = 2;      // torus radius
+  var K2 = 5;      // distance from viewer
+
+  function frame() {
+    // clear buffers
+    for (var i = 0; i < COLS * ROWS; i++) {
+      output[i] = ' ';
+      zbuf[i] = 0;
+    }
+
+    var K1 = COLS * K2 * 3 / (8 * (R1 + R2));
+
+    var cosA = Math.cos(A), sinA = Math.sin(A);
+    var cosB = Math.cos(B), sinB = Math.sin(B);
+
+    for (var theta = 0; theta < 6.28318; theta += 0.07) {
+      var costheta = Math.cos(theta), sintheta = Math.sin(theta);
+      for (var phi = 0; phi < 6.28318; phi += 0.02) {
+        var cosphi = Math.cos(phi), sinphi = Math.sin(phi);
+
+        var circlex = R2 + R1 * costheta;
+        var circley = R1 * sintheta;
+
+        var x = circlex * (cosB * cosphi + sinA * sinB * sinphi) - circley * cosA * sinB;
+        var y = circlex * (sinB * cosphi - sinA * cosB * sinphi) + circley * cosA * cosB;
+        var z = K2 + cosA * circlex * sinphi + circley * sinA;
+        var ooz = 1 / z;
+
+        var xp = Math.floor(COLS / 2 + K1 * ooz * x);
+        var yp = Math.floor(ROWS / 2 - K1 * ooz * y * 0.5);
+
+        if (xp < 0 || xp >= COLS || yp < 0 || yp >= ROWS) continue;
+
+        // Lambert shading, fixed light direction
+        var L = cosphi * costheta * sinB - cosA * costheta * sinphi -
+                sinA * sintheta + cosB * (cosA * sintheta - costheta * sinA * sinphi);
+
+        var idx = xp + yp * COLS;
+        if (ooz > zbuf[idx]) {
+          zbuf[idx] = ooz;
+          if (L > 0) {
+            var li = Math.floor(L * 8);
+            if (li > 11) li = 11;
+            output[idx] = RAMP.charAt(li);
+          } else {
+            output[idx] = RAMP.charAt(0);
+          }
+        }
+      }
+    }
+
+    // draw
+    var w = canvas.width, h = canvas.height;
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, w, h);
+
+    // size characters so the grid fills ~80% of the smaller layout dimension
+    var cellW = (w * 0.8) / COLS;
+    var cellH = (h * 0.8) / ROWS;
+    var fontSize = Math.min(cellW * 1.6, cellH);
+    cellW = fontSize * 0.62;
+    cellH = fontSize;
+
+    var gridW = cellW * COLS;
+    var gridH = cellH * ROWS;
+    var ox = (w - gridW) / 2;
+    var oy = (h - gridH) / 2;
+
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = fontSize + 'px monospace';
+    ctx.textBaseline = 'top';
+
+    for (var row = 0; row < ROWS; row++) {
+      var line = '';
+      var base = row * COLS;
+      for (var col = 0; col < COLS; col++) {
+        line += output[base + col];
+      }
+      // draw char by char for fixed spacing
+      for (var c2 = 0; c2 < COLS; c2++) {
+        var ch = line.charAt(c2);
+        if (ch !== ' ') {
+          ctx.fillText(ch, ox + c2 * cellW, oy + row * cellH);
+        }
+      }
+    }
+
+    A += 0.04;
+    B += 0.02;
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
