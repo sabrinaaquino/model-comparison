@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  const fieldCanvas = document.createElement("canvas");
+  const fieldCtx = fieldCanvas.getContext("2d", { alpha: false });
+
+  const DU = 0.16;
+  const DV = 0.08;
+  const FEED = 0.0367;
+  const KILL = 0.0649;
+  const STEPS_PER_FRAME = 7;
+  const TARGET_CELLS = 150000;
+
+  let width = 0;
+  let height = 0;
+  let gridWidth = 0;
+  let gridHeight = 0;
+  let cellCount = 0;
+
+  let u;
+  let v;
+  let nextU;
+  let nextV;
+  let imageData;
+  let pixels;
+  let left;
+  let right;
+  let up;
+  let down;
+
+  function hash(x, y) {
+    let n = Math.imul(x + 374761393, 668265263) ^
+            Math.imul(y + 1274126177, 2246822519);
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+  }
+
+  function initializeField() {
+    cellCount = gridWidth * gridHeight;
+
+    u = new Float32Array(cellCount);
+    v = new Float32Array(cellCount);
+    nextU = new Float32Array(cellCount);
+    nextV = new Float32Array(cellCount);
+
+    u.fill(1);
+
+    left = new Int32Array(gridWidth);
+    right = new Int32Array(gridWidth);
+    for (let x = 0; x < gridWidth; x++) {
+      left[x] = x === 0 ? gridWidth - 1 : x - 1;
+      right[x] = x === gridWidth - 1 ? 0 : x + 1;
+    }
+
+    up = new Int32Array(gridHeight);
+    down = new Int32Array(gridHeight);
+    for (let y = 0; y < gridHeight; y++) {
+      up[y] = y === 0 ? gridHeight - 1 : y - 1;
+      down[y] = y === gridHeight - 1 ? 0 : y + 1;
+    }
+
+    const cx = gridWidth * 0.5;
+    const cy = gridHeight * 0.5;
+    const radius = Math.max(8, Math.min(gridWidth, gridHeight) * 0.075);
+    const radius2 = radius * radius;
+
+    for (let y = Math.max(0, Math.floor(cy - radius)); y <= Math.min(gridHeight - 1, Math.ceil(cy + radius)); y++) {
+      for (let x = Math.max(0, Math.floor(cx - radius)); x <= Math.min(gridWidth - 1, Math.ceil(cx + radius)); x++) {
+        const dx = x - cx;
+        const dy = y - cy;
+        if (dx * dx + dy * dy <= radius2) {
+          const i = y * gridWidth + x;
+          const noise = hash(x, y);
+          u[i] = 0.42 + noise * 0.08;
+          v[i] = 0.23 + noise * 0.12;
+        }
+      }
+    }
+
+    fieldCanvas.width = gridWidth;
+    fieldCanvas.height = gridHeight;
+    imageData = fieldCtx.createImageData(gridWidth, gridHeight);
+    pixels = imageData.data;
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = Math.max(1, window.innerWidth);
+    height = Math.max(1, window.innerHeight);
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+
+    const aspect = width / height;
+    gridWidth = Math.max(120, Math.round(Math.sqrt(TARGET_CELLS * aspect)));
+    gridHeight = Math.max(80, Math.round(gridWidth / aspect));
+
+    initializeField();
+  }
+
+  function simulateStep() {
+    const w = gridWidth;
+    const h = gridHeight;
+    const currentU = u;
+    const currentV = v;
+    const outputU = nextU;
+    const outputV = nextV;
+
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      const rowUp = up[y] * w;
+      const rowDown = down[y] * w;
+
+      for (let x = 0; x < w; x++) {
+        const xl = left[x];
+        const xr = right[x];
+        const i = row + x;
+
+        const a = currentU[i];
+        const b = currentV[i];
+
+        const lapU =
+          -a +
+          0.2 * (
+            currentU[row + xl] +
+            currentU[row + xr] +
+            currentU[rowUp + x] +
+            currentU[rowDown + x]
+          ) +
+          0.05 * (
+            currentU[rowUp + xl] +
+            currentU[rowUp + xr] +
+            currentU[rowDown + xl] +
+            currentU[rowDown + xr]
+          );
+
+        const lapV =
+          -b +
+          0.2 * (
+            currentV[row + xl] +
+            currentV[row + xr] +
+            currentV[rowUp + x] +
+            currentV[rowDown + x]
+          ) +
+          0.05 * (
+            currentV[rowUp + xl] +
+            currentV[rowUp + xr] +
+            currentV[rowDown + xl] +
+            currentV[rowDown + xr]
+          );
+
+        const reaction = a * b * b;
+        let newU = a + DU * lapU - reaction + FEED * (1 - a);
+        let newV = b + DV * lapV + reaction - (FEED + KILL) * b;
+
+        if (newU < 0) newU = 0;
+        else if (newU > 1) newU = 1;
+        if (newV < 0) newV = 0;
+        else if (newV > 1) newV = 1;
+
+        outputU[i] = newU;
+        outputV[i] = newV;
+      }
+    }
+
+    u = outputU;
+    nextU = currentU;
+    v = outputV;
+    nextV = currentV;
+  }
+
+  function renderField() {
+    const stops = [
+      [11, 11, 13],
+      [30, 58, 138],
+      [79, 209, 255],
+      [234, 246, 255]
+    ];
+
+    let p = 0;
+    for (let i = 0; i < cellCount; i++) {
+      let t = v[i] * 2.35;
+      if (t < 0) t = 0;
+      else if (t > 1) t = 1;
+
+      const scaled = t * 3;
+      const segment = Math.min(2, scaled | 0);
+      const f = scaled - segment;
+      const c0 = stops[segment];
+      const c1 = stops[segment + 1];
+
+      pixels[p++] = c0[0] + (c1[0] - c0[0]) * f;
+      pixels[p++] = c0[1] + (c1[1] - c0[1]) * f;
+      pixels[p++] = c0[2] + (c1[2] - c0[2]) * f;
+      pixels[p++] = 255;
+    }
+
+    fieldCtx.putImageData(imageData, 0, 0);
+
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(fieldCanvas, 0, 0, canvas.width, canvas.height);
+  }
+
+  function frame() {
+    for (let i = 0; i < STEPS_PER_FRAME; i++) {
+      simulateStep();
+    }
+    renderField();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", resize, { passive: true });
+  resize();
+
+  for (let i = 0; i < 80; i++) {
+    simulateStep();
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

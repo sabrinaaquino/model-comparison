@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0b0b0d; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+
+  // Simulation grid (downscaled from screen for speed, upscaled when drawn)
+  var SCALE = 3;           // screen pixels per sim cell
+  var STEPS = 10;          // sim steps per frame
+
+  // Gray-Scott parameters (coral / organic growth, stable)
+  var Du = 1.0, Dv = 0.5;
+  var F = 0.0545, K = 0.062;
+  var dt = 1.0;
+
+  var simW, simH, U, V, U2, V2;
+  var img, off, offCtx;
+
+  // Color ramp LUT: #0b0b0d -> #1e3a8a -> #4fd1ff -> #eaf6ff
+  var stops = [
+    [11, 11, 13],
+    [30, 58, 138],
+    [79, 209, 255],
+    [234, 246, 255]
+  ];
+  var LUT = new Uint8Array(256 * 3);
+  for (var i = 0; i < 256; i++) {
+    var t = i / 255 * 3; // 0..3 across 4 stops
+    var s = Math.min(2, Math.floor(t));
+    var f = t - s;
+    LUT[i * 3]     = Math.round(stops[s][0] + (stops[s + 1][0] - stops[s][0]) * f);
+    LUT[i * 3 + 1] = Math.round(stops[s][1] + (stops[s + 1][1] - stops[s][1]) * f);
+    LUT[i * 3 + 2] = Math.round(stops[s][2] + (stops[s + 1][2] - stops[s][2]) * f);
+  }
+
+  function init() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    simW = Math.max(4, Math.ceil(canvas.width / SCALE));
+    simH = Math.max(4, Math.ceil(canvas.height / SCALE));
+    var n = simW * simH;
+    U = new Float32Array(n);
+    V = new Float32Array(n);
+    U2 = new Float32Array(n);
+    V2 = new Float32Array(n);
+    for (var i = 0; i < n; i++) { U[i] = 1; V[i] = 0; }
+
+    // Seed the center automatically
+    var cx = simW >> 1, cy = simH >> 1;
+    var r = Math.max(4, Math.floor(Math.min(simW, simH) * 0.04));
+    seedBlob(cx, cy, r);
+    // a few small offset seeds so patterns spread interestingly (deterministic-ish)
+    seedBlob(cx - r * 4, cy - r * 3, Math.max(3, r >> 1));
+    seedBlob(cx + r * 4, cy + r * 3, Math.max(3, r >> 1));
+    seedBlob(cx + r * 5, cy - r * 4, Math.max(3, r >> 1));
+    seedBlob(cx - r * 5, cy + r * 4, Math.max(3, r >> 1));
+
+    off = document.createElement('canvas');
+    off.width = simW;
+    off.height = simH;
+    offCtx = off.getContext('2d');
+    img = offCtx.createImageData(simW, simH);
+    // opaque alpha once
+    var d = img.data;
+    for (var p = 3; p < d.length; p += 4) d[p] = 255;
+  }
+
+  function seedBlob(cx, cy, r) {
+    for (var y = cy - r; y <= cy + r; y++) {
+      for (var x = cx - r; x <= cx + r; x++) {
+        var dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy <= r * r) {
+          var xx = ((x % simW) + simW) % simW;
+          var yy = ((y % simH) + simH) % simH;
+          var idx = yy * simW + xx;
+          V[idx] = 1.0;
+          U[idx] = 0.5;
+        }
+      }
+    }
+  }
+
+  function step() {
+    var w = simW, h = simH;
+    var u = U, v = V, u2 = U2, v2 = V2;
+    for (var y = 0; y < h; y++) {
+      var yn = (y === 0 ? h - 1 : y - 1) * w;
+      var ys = (y === h - 1 ? 0 : y + 1) * w;
+      var yc = y * w;
+      for (var x = 0; x < w; x++) {
+        var xw = x === 0 ? w - 1 : x - 1;
+        var xe = x === w - 1 ? 0 : x + 1;
+        var i = yc + x;
+        var uc = u[i], vc = v[i];
+
+        // 9-point Laplacian (isotropic): center -1, adjacent 0.2, diagonal 0.05
+        var lapU = -uc
+          + 0.2  * (u[yc + xw] + u[yc + xe] + u[yn + x] + u[ys + x])
+          + 0.05 * (u[yn + xw] + u[yn + xe] + u[ys + xw] + u[ys + xe]);
+        var lapV = -vc
+          + 0.2  * (v[yc + xw] + v[yc + xe] + v[yn + x] + v[ys + x])
+          + 0.05 * (v[yn + xw] + v[yn + xe] + v[ys + xw] + v[ys + xe]);
+
+        var uvv = uc * vc * vc;
+        var nu = uc + (Du * lapU - uvv + F * (1 - uc)) * dt;
+        var nv = vc + (Dv * lapV + uvv - (F + K) * vc) * dt;
+
+        // clamp for absolute stability
+        u2[i] = nu < 0 ? 0 : (nu > 1 ? 1 : nu);
+        v2[i] = nv < 0 ? 0 : (nv > 1 ? 1 : nv);
+      }
+    }
+    // swap buffers
+    U = u2; U2 = u;
+    V = v2; V2 = v;
+  }
+
+  function render() {
+    var d = img.data;
+    var v = V;
+    var n = simW * simH;
+    for (var i = 0, p = 0; i < n; i++, p += 4) {
+      // map V concentration to ramp; V typically peaks near ~0.4
+      var t = v[i] * 2.6;
+      if (t > 1) t = 1;
+      var ci = (t * 255) | 0;
+      var c3 = ci * 3;
+      d[p]     = LUT[c3];
+      d[p + 1] = LUT[c3 + 1];
+      d[p + 2] = LUT[c3 + 2];
+    }
+    offCtx.putImageData(img, 0, 0);
+
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+  }
+
+  var frames = 0;
+  function loop() {
+    for (var s = 0; s < STEPS; s++) step();
+    render();
+    frames++;
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('resize', init);
+  init();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

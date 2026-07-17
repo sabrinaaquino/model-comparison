@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spiral Galaxy</title>
+<style>
+html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000000; }
+canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+"use strict";
+
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+
+// ---------------- config ----------------
+var STAR_COUNT      = 12000;   // >= 8000
+var ARMS            = 4;
+var SPIN            = 4.4;     // radians of winding across the radius
+var RANDOMNESS      = 0.30;
+var RANDOMNESS_POW  = 2.4;
+var CORE_FRACTION   = 0.16;    // share of stars packed into the dense core
+var COLOR_BUCKETS   = 64;
+var ROT_SPEED       = 0.06;    // rad/s, slow auto-rotation
+
+var CORE_RGB = [255, 215, 168]; // #ffd7a8 warm core
+var EDGE_RGB = [ 79, 209, 255]; // #4fd1ff cool outer arms
+
+// ---------------- state ----------------
+var W = 0, H = 0, CX = 0, CY = 0, R = 1, DPR = 1;
+var glowGradient = null;
+
+// color palette: warm core -> cool blue edge
+var palette = [];
+for (var i = 0; i < COLOR_BUCKETS; i++) {
+  var t = i / (COLOR_BUCKETS - 1);
+  var r = Math.round(CORE_RGB[0] + (EDGE_RGB[0] - CORE_RGB[0]) * t);
+  var g = Math.round(CORE_RGB[1] + (EDGE_RGB[1] - CORE_RGB[1]) * t);
+  var b = Math.round(CORE_RGB[2] + (EDGE_RGB[2] - CORE_RGB[2]) * t);
+  palette.push('rgb(' + r + ',' + g + ',' + b + ')');
+}
+
+function spread() {
+  return Math.pow(Math.random(), RANDOMNESS_POW) * (Math.random() < 0.5 ? -1 : 1);
+}
+
+// ---------------- generate stars ----------------
+// positions stored normalized (radius 1 = galaxy edge), bucketed by color
+var buckets = [];
+for (var b0 = 0; b0 < COLOR_BUCKETS; b0++) buckets.push([]);
+
+var coreCount = Math.floor(STAR_COUNT * CORE_FRACTION);
+
+for (var s = 0; s < STAR_COUNT; s++) {
+  var x, y, rNorm;
+
+  if (s < coreCount) {
+    // dense, roughly spherical warm core
+    rNorm = Math.pow(Math.random(), 2.2) * 0.30;
+    var ca = Math.random() * Math.PI * 2;
+    var cr = rNorm * (1 + 0.25 * spread());
+    x = Math.cos(ca) * cr;
+    y = Math.sin(ca) * cr;
+    rNorm = Math.min(1, Math.sqrt(x * x + y * y));
+  } else {
+    // spiral arms: branch angle + spin angle + radial-proportional fuzz
+    rNorm = Math.random();
+    var branchAngle = ((s % ARMS) / ARMS) * Math.PI * 2;
+    var spinAngle = rNorm * SPIN;
+    var a = branchAngle + spinAngle;
+    x = Math.cos(a) * rNorm + spread() * RANDOMNESS * rNorm;
+    y = Math.sin(a) * rNorm + spread() * RANDOMNESS * rNorm;
+    rNorm = Math.min(1, Math.sqrt(x * x + y * y));
+  }
+
+  var ct = Math.pow(rNorm, 0.8);
+  var bi = Math.min(COLOR_BUCKETS - 1, Math.floor(ct * COLOR_BUCKETS));
+
+  var size = 1 + Math.pow(Math.random(), 3) * 1.8;
+  if (rNorm < 0.08) size += 0.8; // chunky bright core stars
+
+  buckets[bi].push({
+    x: x,
+    y: y,
+    s: size,
+    a: 0.45 + Math.random() * 0.55,      // base alpha
+    p: Math.random() * Math.PI * 2,      // twinkle phase
+    tw: 0.5 + Math.random() * 1.5        // twinkle speed
+  });
+}
+
+// ---------------- resize ----------------
+function buildGlow() {
+  var br = R * 0.55;
+  glowGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, br);
+  glowGradient.addColorStop(0.00, 'rgba(255,214,170,0.40)');
+  glowGradient.addColorStop(0.30, 'rgba(255,196,150,0.15)');
+  glowGradient.addColorStop(0.65, 'rgba(255,180,130,0.05)');
+  glowGradient.addColorStop(1.00, 'rgba(255,180,130,0)');
+}
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  CX = W / 2;
+  CY = H / 2;
+  R = Math.min(W, H) * 0.44;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  buildGlow();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------------- render loop ----------------
+var angle = 0;
+var last = performance.now();
+
+function frame(now) {
+  var dt = (now - last) / 1000;
+  if (dt > 0.05) dt = 0.05;
+  last = now;
+  angle += dt * ROT_SPEED;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.translate(CX, CY);
+  ctx.globalCompositeOperation = 'lighter';
+
+  // subtle warm bloom around the core
+  var br = R * 0.55;
+  ctx.fillStyle = glowGradient;
+  ctx.fillRect(-br, -br, br * 2, br * 2);
+
+  // stars (additive, color-bucketed to minimize fillStyle changes)
+  var cos = Math.cos(angle);
+  var sin = Math.sin(angle);
+  var t = now / 1000;
+
+  for (var b = 0; b < COLOR_BUCKETS; b++) {
+    var arr = buckets[b];
+    var n = arr.length;
+    if (n === 0) continue;
+    ctx.fillStyle = palette[b];
+    for (var i = 0; i < n; i++) {
+      var st = arr[i];
+      var px = (st.x * cos - st.y * sin) * R;
+      var py = (st.x * sin + st.y * cos) * R;
+      ctx.globalAlpha = st.a * (0.8 + 0.2 * Math.sin(t * st.tw + st.p));
+      var hs = st.s * 0.5;
+      ctx.fillRect(px - hs, py - hs, st.s, st.s);
+    }
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>

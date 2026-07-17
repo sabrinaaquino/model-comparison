@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b0b0d}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const buffer = document.createElement("canvas");
+  const bctx = buffer.getContext("2d", { alpha: false });
+
+  let W = 0, H = 0, image, accumulation, samples = 0;
+  let orbit = 0.45;
+  let seed = 0x12345678;
+
+  const MAX_SAMPLES = 48;
+  const EPS = 0.001;
+
+  const spheres = [
+    { c:[-1.55,0.72,0.15], r:0.72, color:[0.95,0.19,0.07], type:0, rough:1.0 },
+    { c:[0.05,1.02,-0.25], r:1.02, color:[0.96,0.98,1.00], type:1, rough:0.0 },
+    { c:[1.65,0.62,0.45], r:0.62, color:[0.08,0.28,0.95], type:2, rough:0.11 },
+    { c:[0.95,0.38,-1.55], r:0.38, color:[0.95,0.62,0.12], type:0, rough:1.0 }
+  ];
+
+  const light = {
+    c:[-0.4,5.0,0.25],
+    r:0.75,
+    emission:[15.0,13.8,12.0]
+  };
+
+  function resize() {
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+
+    const targetPixels = 42000;
+    const aspect = Math.max(0.25, innerWidth / Math.max(1, innerHeight));
+    W = Math.max(120, Math.round(Math.sqrt(targetPixels * aspect)));
+    H = Math.max(80, Math.round(W / aspect));
+
+    buffer.width = W;
+    buffer.height = H;
+    image = bctx.createImageData(W, H);
+    accumulation = new Float32Array(W * H * 3);
+    samples = 0;
+  }
+
+  addEventListener("resize", resize);
+
+  function random() {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return (seed >>> 0) / 4294967296;
+  }
+
+  function dot(a,b) {
+    return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  }
+
+  function cross(a,b) {
+    return [
+      a[1]*b[2] - a[2]*b[1],
+      a[2]*b[0] - a[0]*b[2],
+      a[0]*b[1] - a[1]*b[0]
+    ];
+  }
+
+  function norm(a) {
+    const l = Math.sqrt(dot(a,a)) || 1;
+    return [a[0]/l, a[1]/l, a[2]/l];
+  }
+
+  function reflect(d,n) {
+    const k = 2 * dot(d,n);
+    return [d[0]-k*n[0], d[1]-k*n[1], d[2]-k*n[2]];
+  }
+
+  function basis(n) {
+    const a = Math.abs(n[1]) < 0.99 ? [0,1,0] : [1,0,0];
+    const t = norm(cross(a,n));
+    return [t, cross(n,t)];
+  }
+
+  function cosineHemisphere(n) {
+    const r1 = 2 * Math.PI * random();
+    const r2 = random();
+    const sr = Math.sqrt(r2);
+    const x = Math.cos(r1) * sr;
+    const y = Math.sin(r1) * sr;
+    const z = Math.sqrt(1-r2);
+    const b = basis(n);
+    return norm([
+      b[0][0]*x + b[1][0]*y + n[0]*z,
+      b[0][1]*x + b[1][1]*y + n[1]*z,
+      b[0][2]*x + b[1][2]*y + n[2]*z
+    ]);
+  }
+
+  function glossyDirection(r, rough) {
+    if (rough <= 0) return r;
+    const b = basis(r);
+    const radius = rough * Math.sqrt(random());
+    const angle = 2 * Math.PI * random();
+    return norm([
+      r[0] + b[0][0]*Math.cos(angle)*radius + b[1][0]*Math.sin(angle)*radius,
+      r[1] + b[0][1]*Math.cos(angle)*radius + b[1][1]*Math.sin(angle)*radius,
+      r[2] + b[0][2]*Math.cos(angle)*radius + b[1][2]*Math.sin(angle)*radius
+    ]);
+  }
+
+  function intersectSphere(ro, rd, c, r) {
+    const ox = ro[0]-c[0], oy = ro[1]-c[1], oz = ro[2]-c[2];
+    const b = ox*rd[0] + oy*rd[1] + oz*rd[2];
+    const q = ox*ox + oy*oy + oz*oz - r*r;
+    const h = b*b - q;
+    if (h < 0) return Infinity;
+    const s = Math.sqrt(h);
+    const t0 = -b-s;
+    if (t0 > EPS) return t0;
+    const t1 = -b+s;
+    return t1 > EPS ? t1 : Infinity;
+  }
+
+  function intersect(ro, rd) {
+    let best = Infinity;
+    let hit = null;
+
+    for (let i=0; i<spheres.length; i++) {
+      const s = spheres[i];
+      const t = intersectSphere(ro,rd,s.c,s.r);
+      if (t < best) {
+        best = t;
+        hit = { t, kind:0, object:s };
+      }
+    }
+
+    const lt = intersectSphere(ro,rd,light.c,light.r);
+    if (lt < best) {
+      best = lt;
+      hit = { t:lt, kind:1, object:light };
+    }
+
+    if (Math.abs(rd[1]) > 1e-8) {
+      const t = -ro[1] / rd[1];
+      if (t > EPS && t < best) {
+        const x = ro[0] + rd[0]*t;
+        const z = ro[2] + rd[2]*t;
+        if (Math.abs(x) < 12 && Math.abs(z) < 12) {
+          hit = {
+            t,
+            kind:2,
+            object:{ color:[0.58,0.60,0.64], type:0, rough:1 }
+          };
+        }
+      }
+    }
+    return hit;
+  }
+
+  function visible(ro, direction, maxDistance) {
+    const h = intersect(ro,direction);
+    return !h || h.t >= maxDistance - 0.01;
+  }
+
+  function directLight(p,n,view,material) {
+    const z = 1 - 2*random();
+    const a = 2*Math.PI*random();
+    const rr = Math.sqrt(Math.max(0,1-z*z));
+    const ln = [rr*Math.cos(a), z, rr*Math.sin(a)];
+    const lp = [
+      light.c[0] + ln[0]*light.r,
+      light.c[1] + ln[1]*light.r,
+      light.c[2] + ln[2]*light.r
+    ];
+
+    const vx = lp[0]-p[0], vy = lp[1]-p[1], vz = lp[2]-p[2];
+    const d2 = vx*vx + vy*vy + vz*vz;
+    const dist = Math.sqrt(d2);
+    const l = [vx/dist,vy/dist,vz/dist];
+    const ndl = Math.max(0,dot(n,l));
+    const lFacing = Math.max(0,-dot(ln,l));
+
+    if (ndl <= 0 || lFacing <= 0) return [0,0,0];
+
+    const origin = [p[0]+n[0]*EPS*4,p[1]+n[1]*EPS*4,p[2]+n[2]*EPS*4];
+    if (!visible(origin,l,dist)) return [0,0,0];
+
+    const area = 4*Math.PI*light.r*light.r;
+    const geometry = ndl * lFacing * area / Math.max(0.01,d2);
+    const diffuseWeight = material.type === 1 ? 0 : (material.type === 2 ? 0.2 : 1);
+    const diffuse = geometry * diffuseWeight / Math.PI;
+
+    let specular = 0;
+    if (material.type === 2) {
+      const h = norm([l[0]+view[0],l[1]+view[1],l[2]+view[2]]);
+      const exponent = Math.max(4, 2/(material.rough*material.rough)-2);
+      specular = geometry * Math.pow(Math.max(0,dot(n,h)),exponent) *
+                 (exponent+2)/(2*Math.PI) * 0.7;
+    }
+
+    return [
+      light.emission[0]*(material.color[0]*diffuse + specular),
+      light.emission[1]*(material.color[1]*diffuse + specular),
+      light.emission[2]*(material.color[2]*diffuse + specular)
+    ];
+  }
+
+  function trace(ro,rd) {
+    let radiance = [0,0,0];
+    let throughput = [1,1,1];
+
+    for (let depth=0; depth<5; depth++) {
+      const hit = intersect(ro,rd);
+
+      if (!hit) {
+        const sky = Math.max(0,rd[1]);
+        radiance[0] += throughput[0]*(0.004 + 0.008*sky);
+        radiance[1] += throughput[1]*(0.005 + 0.009*sky);
+        radiance[2] += throughput[2]*(0.008 + 0.014*sky);
+        break;
+      }
+
+      const p = [
+        ro[0]+rd[0]*hit.t,
+        ro[1]+rd[1]*hit.t,
+        ro[2]+rd[2]*hit.t
+      ];
+
+      if (hit.kind === 1) {
+        radiance[0] += throughput[0]*light.emission[0];
+        radiance[1] += throughput[1]*light.emission[1];
+        radiance[2] += throughput[2]*light.emission[2];
+        break;
+      }
+
+      let n;
+      if (hit.kind === 2) {
+        n = [0,1,0];
+      } else {
+        const s = hit.object;
+        n = norm([p[0]-s.c[0],p[1]-s.c[1],p[2]-s.c[2]]);
+      }
+      if (dot(n,rd) > 0) n = [-n[0],-n[1],-n[2]];
+
+      const m = hit.object;
+      const view = [-rd[0],-rd[1],-rd[2]];
+
+      if (m.type !== 1) {
+        const dl = directLight(p,n,view,m);
+        radiance[0] += throughput[0]*dl[0];
+        radiance[1] += throughput[1]*dl[1];
+        radiance[2] += throughput[2]*dl[2];
+      }
+
+      if (m.type === 1) {
+        rd = reflect(rd,n);
+        throughput[0] *= m.color[0];
+        throughput[1] *= m.color[1];
+        throughput[2] *= m.color[2];
+      } else if (m.type === 2) {
+        if (random() < 0.82) {
+          rd = glossyDirection(reflect(rd,n),m.rough);
+          if (dot(rd,n) <= 0) rd = reflect(rd,n);
+          throughput[0] *= m.color[0];
+          throughput[1] *= m.color[1];
+          throughput[2] *= m.color[2];
+        } else {
+          rd = cosineHemisphere(n);
+          throughput[0] *= m.color[0]*0.35;
+          throughput[1] *= m.color[1]*0.35;
+          throughput[2] *= m.color[2]*0.35;
+        }
+      } else {
+        rd = cosineHemisphere(n);
+        throughput[0] *= m.color[0];
+        throughput[1] *= m.color[1];
+        throughput[2] *= m.color[2];
+      }
+
+      ro = [
+        p[0]+n[0]*EPS*4,
+        p[1]+n[1]*EPS*4,
+        p[2]+n[2]*EPS*4
+      ];
+
+      if (depth >= 2) {
+        const q = Math.max(0.15,Math.min(0.95,Math.max(throughput[0],throughput[1],throughput[2])));
+        if (random() > q) break;
+        throughput[0] /= q;
+        throughput[1] /= q;
+        throughput[2] /= q;
+      }
+    }
+    return radiance;
+  }
+
+  function renderSample() {
+    const eye = [
+      Math.cos(orbit)*6.7,
+      3.1,
+      Math.sin(orbit)*6.7
+    ];
+    const target = [0,0.75,-0.15];
+    const forward = norm([
+      target[0]-eye[0],
+      target[1]-eye[1],
+      target[2]-eye[2]
+    ]);
+    const right = norm(cross(forward,[0,1,0]));
+    const up = cross(right,forward);
+    const aspect = W/H;
+    const scale = Math.tan(48*Math.PI/360);
+
+    let ai = 0;
+    for (let y=0; y<H; y++) {
+      for (let x=0; x<W; x++, ai+=3) {
+        const sx = ((x+random())/W*2-1)*aspect*scale;
+        const sy = (1-(y+random())/H*2)*scale;
+        const rd = norm([
+          forward[0]+right[0]*sx+up[0]*sy,
+          forward[1]+right[1]*sx+up[1]*sy,
+          forward[2]+right[2]*sx+up[2]*sy
+        ]);
+        const c = trace(eye,rd);
+        accumulation[ai] += c[0];
+        accumulation[ai+1] += c[1];
+        accumulation[ai+2] += c[2];
+      }
+    }
+    samples++;
+  }
+
+  function display() {
+    const inv = 1/Math.max(1,samples);
+    const data = image.data;
+
+    for (let i=0,j=0; i<accumulation.length; i+=3,j+=4) {
+      let r = accumulation[i]*inv;
+      let g = accumulation[i+1]*inv;
+      let b = accumulation[i+2]*inv;
+
+      r = r/(1+r);
+      g = g/(1+g);
+      b = b/(1+b);
+
+      data[j]   = Math.min(255,Math.pow(Math.max(0,r),1/2.2)*255);
+      data[j+1] = Math.min(255,Math.pow(Math.max(0,g),1/2.2)*255);
+      data[j+2] = Math.min(255,Math.pow(Math.max(0,b),1/2.2)*255);
+      data[j+3] = 255;
+    }
+
+    bctx.putImageData(image,0,0);
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(buffer,0,0,canvas.width,canvas.height);
+  }
+
+  function frame() {
+    renderSample();
+    display();
+
+    if (samples >= MAX_SAMPLES) {
+      orbit += 0.018;
+      accumulation.fill(0);
+      samples = 0;
+    }
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

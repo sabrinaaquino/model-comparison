@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gray-Scott</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#0b0b0d;}
+canvas{display:block;width:100vw;height:100vh;}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<script>
+(function(){
+"use strict";
+
+var canvas=document.getElementById("view");
+var ctx=canvas.getContext("2d");
+var off=document.createElement("canvas");
+var octx=off.getContext("2d");
+
+// Gray-Scott parameters (coral / maze regime)
+var Du=1.0, Dv=0.5, FEED=0.0545, KILL=0.062;
+var VSCALE=3.0;   // V concentration -> ramp position
+var STEPS=8;      // simulation steps per frame
+
+var W=0,H=0,N=0,CELL=4;
+var U=null,V=null,U2=null,V2;
+V2=null;
+var img=null;
+var flatFrames=0;
+
+// Color ramp LUT: #0b0b0d -> #1e3a8a -> #4fd1ff -> #eaf6ff
+var LUT=new Uint8Array(256*3);
+(function(){
+  var stops=[[11,11,13],[30,58,138],[79,209,255],[234,246,255]];
+  for(var i=0;i<256;i++){
+    var t=i/255;
+    var seg=Math.floor(t*3); if(seg>2)seg=2;
+    var s=t*3-seg;
+    var a=stops[seg],b=stops[seg+1];
+    LUT[i*3  ]=Math.round(a[0]+(b[0]-a[0])*s);
+    LUT[i*3+1]=Math.round(a[1]+(b[1]-a[1])*s);
+    LUT[i*3+2]=Math.round(a[2]+(b[2]-a[2])*s);
+  }
+})();
+
+function seed(cx,cy,r){
+  cx|=0; cy|=0;
+  for(var dy=-r;dy<=r;dy++){
+    for(var dx=-r;dx<=r;dx++){
+      if(dx*dx+dy*dy<=r*r){
+        var x=(cx+dx+W)%W, y=(cy+dy+H)%H;
+        var i=y*W+x;
+        V[i]=1.0; U[i]=0.5;
+      }
+    }
+  }
+}
+
+function init(){
+  U=new Float32Array(N);  V=new Float32Array(N);
+  U2=new Float32Array(N); V2=new Float32Array(N);
+  U.fill(1.0);
+  img=octx.createImageData(W,H);
+  // automatic center seed so patterns grow on their own
+  seed(W>>1,H>>1,Math.max(4,Math.min(W,H)>>4));
+  // a few small scattered seeds for organic asymmetry
+  var extra=4+((Math.random()*4)|0);
+  for(var s=0;s<extra;s++){
+    seed(Math.random()*W,Math.random()*H,2+((Math.random()*4)|0));
+  }
+  flatFrames=0;
+}
+
+function resize(){
+  canvas.width=window.innerWidth;
+  canvas.height=window.innerHeight;
+  var px=canvas.width*canvas.height;
+  CELL=Math.max(4,Math.ceil(Math.sqrt(px/130000)));
+  W=Math.max(32,Math.round(canvas.width/CELL));
+  H=Math.max(32,Math.round(canvas.height/CELL));
+  N=W*H;
+  off.width=W; off.height=H;
+  ctx.imageSmoothingEnabled=false;
+  init();
+}
+
+function step(){
+  for(var y=0;y<H;y++){
+    var yu=(y===0?H-1:y-1)*W;
+    var yd=(y===H-1?0:y+1)*W;
+    var yc=y*W;
+    for(var x=0;x<W;x++){
+      var xl=(x===0?W-1:x-1);
+      var xr=(x===W-1?0:x+1);
+      var i=yc+x;
+      var u=U[i], v=V[i];
+      var lapU=(U[yc+xl]+U[yc+xr]+U[yu+x]+U[yd+x])*0.2
+              +(U[yu+xl]+U[yu+xr]+U[yd+xl]+U[yd+xr])*0.05 - u;
+      var lapV=(V[yc+xl]+V[yc+xr]+V[yu+x]+V[yd+x])*0.2
+              +(V[yu+xl]+V[yu+xr]+V[yd+xl]+V[yd+xr])*0.05 - v;
+      var uvv=u*v*v;
+      var un=u+Du*lapU-uvv+FEED*(1.0-u);
+      var vn=v+Dv*lapV+uvv-(FEED+KILL)*v;
+      U2[i]=un<0?0:(un>1?1:un);
+      V2[i]=vn<0?0:(vn>1?1:vn);
+    }
+  }
+  var t;
+  t=U; U=U2; U2=t;
+  t=V; V=V2; V2=t;
+}
+
+function render(){
+  var d=img.data;
+  var maxV=0;
+  for(var i=0,p=0;i<N;i++,p+=4){
+    var v=V[i];
+    if(v>maxV)maxV=v;
+    var t=v*VSCALE; if(t>1)t=1;
+    var j=((t*255)|0)*3;
+    d[p  ]=LUT[j  ];
+    d[p+1]=LUT[j+1];
+    d[p+2]=LUT[j+2];
+    d[p+3]=255;
+  }
+  octx.putImageData(img,0,0);
+  ctx.fillStyle="#0b0b0d";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(off,0,0,canvas.width,canvas.height);
+
+  // safety net: if the field ever dies out, reseed automatically
+  if(maxV<0.03){
+    flatFrames++;
+    if(flatFrames>120)init();
+  }else{
+    flatFrames=0;
+  }
+}
+
+function frame(){
+  for(var s=0;s<STEPS;s++)step();
+  render();
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener("resize",resize);
+resize();
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>

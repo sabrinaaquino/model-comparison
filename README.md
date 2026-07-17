@@ -2,7 +2,7 @@
 
 Same prompt, four frontier models, side by side.
 
-Each model is asked — one-shot, with identical parameters — to write a self-contained physics simulation, and their outputs are rendered together in a 2×2 grid so you can watch all four run at the same time. Across **9 physics events**, only the physics differs between cells; the visual styling is pinned so the comparison is fair.
+Each model is asked — one-shot, with identical parameters — to write a self-contained simulation or renderer, and their outputs are shown together in a 2×2 grid so you can watch all four run at the same time. Across **12 events** — physics sims, cellular simulations, and 3D renderers — the physics events pin a shared visual spec so only the behavior differs between cells.
 
 Every generation runs through the [Venice API](https://venice.ai).
 
@@ -30,6 +30,9 @@ Every model gets the **same prompt** (temperature 0.6, seed 42, one shot) with a
 | Throwing objects | Projectile motion + collisions + stacking |
 | Ship on waves | Buoyancy + wave motion |
 | Donut | The classic spinning 3D ASCII donut (donut.c homage) — rotating torus with luminance shading + z-buffer |
+| Path tracer | CPU ray/path tracer — spheres with reflections, soft shadows, anti-aliasing; the hardest render here |
+| Reaction-diffusion | Gray-Scott Turing patterns — organic evolving spots / stripes / mazes |
+| Galaxy | An 8,000-star spiral galaxy — branch/spin-angle arms, warm core to cool arms, additive-blended glow |
 
 ## Preview
 
@@ -47,6 +50,12 @@ Every model gets the **same prompt** (temperature 0.6, seed 42, one shot) with a
 
 ### Fluid (water)
 ![Fluid](assets/fluid.png)
+
+### Path tracer
+![Path tracer](assets/pathtracer.png)
+
+### Galaxy
+![Galaxy](assets/galaxy.png)
 
 ## Run it locally
 
@@ -83,7 +92,7 @@ On Windows PowerShell:
 $env:VENICE_KEY = 'your_key'; node run-showdown.mjs --task=hexagon
 ```
 
-Valid `--task` values: `hexagon`, `pendulum`, `particles`, `orbits`, `cloth`, `fluid`, `throwing`, `ship`, `donut`.
+Valid `--task` values: `hexagon`, `pendulum`, `particles`, `orbits`, `cloth`, `fluid`, `throwing`, `ship`, `donut`, `pathtracer`, `reactiondiff`, `galaxy`.
 Outputs are written to `out/<event>/<model-id>.html` — one self-contained HTML file per cell.
 
 ## How it works

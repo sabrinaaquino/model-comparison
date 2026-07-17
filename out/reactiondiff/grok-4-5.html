@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;width:100%;height:100%}
+canvas{display:block;width:100vw;height:100vh}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d", { alpha: false });
+
+  var aspect = window.innerWidth / Math.max(1, window.innerHeight);
+  var maxSide = 280;
+  var SIM_W, SIM_H;
+  if (aspect >= 1) {
+    SIM_W = maxSide;
+    SIM_H = Math.max(120, Math.round(maxSide / aspect));
+  } else {
+    SIM_H = maxSide;
+    SIM_W = Math.max(120, Math.round(maxSide * aspect));
+  }
+
+  var Du = 0.16;
+  var Dv = 0.08;
+  var F = 0.035;
+  var k = 0.060;
+  var STEPS = 14;
+  var N = SIM_W * SIM_H;
+
+  var u = new Float32Array(N);
+  var v = new Float32Array(N);
+  var uN = new Float32Array(N);
+  var vN = new Float32Array(N);
+
+  var off = document.createElement("canvas");
+  off.width = SIM_W;
+  off.height = SIM_H;
+  var offCtx = off.getContext("2d", { alpha: false });
+  var img = offCtx.createImageData(SIM_W, SIM_H);
+  var px = img.data;
+
+  var stops = [
+    [0x0b, 0x0b, 0x0d],
+    [0x1e, 0x3a, 0x8a],
+    [0x4f, 0xd1, 0xff],
+    [0xea, 0xf6, 0xff]
+  ];
+
+  function wrapI(x, y) {
+    x = (x + SIM_W) % SIM_W;
+    y = (y + SIM_H) % SIM_H;
+    return y * SIM_W + x;
+  }
+
+  function init() {
+    var i;
+    for (i = 0; i < N; i++) {
+      u[i] = 1.0;
+      v[i] = 0.0;
+    }
+    var cx = (SIM_W * 0.5) | 0;
+    var cy = (SIM_H * 0.5) | 0;
+    var r = 14;
+    var y, x, dx, dy;
+    for (y = cy - r; y <= cy + r; y++) {
+      for (x = cx - r; x <= cx + r; x++) {
+        dx = x - cx;
+        dy = y - cy;
+        if (dx * dx + dy * dy <= r * r) {
+          i = wrapI(x, y);
+          u[i] = 0.50;
+          v[i] = 0.25 + Math.random() * 0.15;
+        }
+      }
+    }
+    var n, sx, sy, sr;
+    for (n = 0; n < 10; n++) {
+      sx = cx + ((Math.random() - 0.5) * 50) | 0;
+      sy = cy + ((Math.random() - 0.5) * 50) | 0;
+      sr = 2 + ((Math.random() * 5) | 0);
+      for (y = sy - sr; y <= sy + sr; y++) {
+        for (x = sx - sr; x <= sx + sr; x++) {
+          dx = x - sx;
+          dy = y - sy;
+          if (dx * dx + dy * dy <= sr * sr) {
+            i = wrapI(x, y);
+            u[i] = 0.50;
+            v[i] = 0.25 + Math.random() * 0.2;
+          }
+        }
+      }
+    }
+  }
+
+  function step() {
+    var x, y, i, uu, vv, uvv, lu, lv, nu, nv;
+    for (y = 0; y < SIM_H; y++) {
+      for (x = 0; x < SIM_W; x++) {
+        i = y * SIM_W + x;
+        uu = u[i];
+        vv = v[i];
+        uvv = uu * vv * vv;
+        lu =
+          u[wrapI(x - 1, y)] +
+          u[wrapI(x + 1, y)] +
+          u[wrapI(x, y - 1)] +
+          u[wrapI(x, y + 1)] -
+          4 * uu;
+        lv =
+          v[wrapI(x - 1, y)] +
+          v[wrapI(x + 1, y)] +
+          v[wrapI(x, y - 1)] +
+          v[wrapI(x, y + 1)] -
+          4 * vv;
+        nu = uu + Du * lu - uvv + F * (1 - uu);
+        nv = vv + Dv * lv + uvv - (F + k) * vv;
+        if (nu < 0) nu = 0;
+        else if (nu > 1) nu = 1;
+        if (nv < 0) nv = 0;
+        else if (nv > 1) nv = 1;
+        uN[i] = nu;
+        vN[i] = nv;
+      }
+    }
+    var t = u;
+    u = uN;
+    uN = t;
+    t = v;
+    v = vN;
+    vN = t;
+  }
+
+  function mapColor(t) {
+    if (t < 0) t = 0;
+    else if (t > 1) t = 1;
+    var segs = stops.length - 1;
+    var x = t * segs;
+    var i = x | 0;
+    if (i >= segs) i = segs - 1;
+    var f = x - i;
+    var a = stops[i];
+    var b = stops[i + 1];
+    return [
+      a[0] + (b[0] - a[0]) * f,
+      a[1] + (b[1] - a[1]) * f,
+      a[2] + (b[2] - a[2]) * f
+    ];
+  }
+
+  function render() {
+    var i, p, t, c;
+    for (i = 0; i < N; i++) {
+      t = v[i] * 2.75;
+      if (t > 1) t = 1;
+      c = mapColor(t);
+      p = i << 2;
+      px[p] = c[0];
+      px[p + 1] = c[1];
+      px[p + 2] = c[2];
+      px[p + 3] = 255;
+    }
+    offCtx.putImageData(img, 0, 0);
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+  }
+
+  function resize() {
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, (window.innerWidth * dpr) | 0);
+    canvas.height = Math.max(1, (window.innerHeight * dpr) | 0);
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+  }
+
+  function frame() {
+    var s;
+    for (s = 0; s < STEPS; s++) step();
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+  init();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

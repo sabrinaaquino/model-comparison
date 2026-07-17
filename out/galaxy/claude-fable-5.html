@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var W, H, CX, CY, MAXR;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    CX = W / 2;
+    CY = H / 2;
+    MAXR = Math.min(W, H) * 0.46;
+    buildGalaxy();
+  }
+
+  // ---- color interpolation core -> outer ----
+  var CORE = { r: 0xff, g: 0xd7, b: 0xa8 };   // warm core
+  var OUTER = { r: 0x4f, g: 0xd1, b: 0xff };  // cool blue arms
+  var BUCKETS = 24;
+  var bucketColors = [];
+  for (var b = 0; b < BUCKETS; b++) {
+    var t = b / (BUCKETS - 1);
+    var r = Math.round(CORE.r + (OUTER.r - CORE.r) * t);
+    var g = Math.round(CORE.g + (OUTER.g - CORE.g) * t);
+    var bl = Math.round(CORE.b + (OUTER.b - CORE.b) * t);
+    var alpha = 0.85 - 0.35 * t; // core stars a bit brighter
+    bucketColors.push('rgba(' + r + ',' + g + ',' + bl + ',' + alpha.toFixed(2) + ')');
+  }
+
+  // stars grouped by color bucket to minimize fillStyle changes
+  var groups = []; // groups[b] = Float32Array-like [x,y,size, x,y,size, ...]
+
+  var STAR_COUNT = 12000;
+  var ARMS = 4;
+  var SPIN = 4.2;        // radians of twist across full radius
+  var RAND_POW = 3;      // scatter concentration
+
+  function gaussScatter(radius, spread) {
+    // random offset, tighter near arm center
+    var s = Math.pow(Math.random(), RAND_POW) * (Math.random() < 0.5 ? 1 : -1);
+    return s * spread * radius;
+  }
+
+  function buildGalaxy() {
+    groups = [];
+    for (var i = 0; i < BUCKETS; i++) groups.push([]);
+
+    for (var i = 0; i < STAR_COUNT; i++) {
+      // radius: heavily biased toward center -> dense core
+      var rn = Math.pow(Math.random(), 2.2);
+      var radius = rn * MAXR;
+
+      var branchAngle = ((i % ARMS) / ARMS) * Math.PI * 2;
+      var spinAngle = (radius / MAXR) * SPIN;
+
+      var offX = gaussScatter(radius, 0.55) + (Math.random() - 0.5) * 6;
+      var offY = gaussScatter(radius, 0.55) + (Math.random() - 0.5) * 6;
+
+      var a = branchAngle + spinAngle;
+      var x = Math.cos(a) * radius + offX;
+      var y = Math.sin(a) * radius + offY;
+
+      var rr = Math.sqrt(x * x + y * y);
+      var t = Math.min(rr / MAXR, 1);
+      var bucket = Math.min(BUCKETS - 1, Math.floor(t * BUCKETS));
+
+      // size: bigger + brighter near core, mostly tiny outside
+      var size;
+      var szr = Math.random();
+      if (t < 0.12) size = szr < 0.7 ? 2 : 3;
+      else if (t < 0.4) size = szr < 0.8 ? 1.5 : 2;
+      else size = szr < 0.85 ? 1 : 1.5;
+
+      groups[bucket].push(x, y, size);
+    }
+
+    // extra dense core cluster
+    var CORE_EXTRA = 2500;
+    for (var i = 0; i < CORE_EXTRA; i++) {
+      var radius = Math.pow(Math.random(), 3) * MAXR * 0.14;
+      var a = Math.random() * Math.PI * 2;
+      var x = Math.cos(a) * radius;
+      var y = Math.sin(a) * radius;
+      var t = Math.min(Math.sqrt(x * x + y * y) / MAXR, 1);
+      var bucket = Math.min(BUCKETS - 1, Math.floor(t * BUCKETS));
+      groups[bucket].push(x, y, Math.random() < 0.6 ? 2 : 3);
+    }
+  }
+
+  var angle = 0;
+  var last = performance.now();
+
+  function frame(now) {
+    var dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    angle += dt * 0.06; // slow auto-rotation
+
+    // solid black background
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(CX, CY);
+    ctx.rotate(angle);
+
+    // additive blending so overlapping stars glow
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (var b = 0; b < BUCKETS; b++) {
+      var arr = groups[b];
+      if (arr.length === 0) continue;
+      ctx.fillStyle = bucketColors[b];
+      for (var i = 0; i < arr.length; i += 3) {
+        var s = arr[i + 2];
+        ctx.fillRect(arr[i] - s * 0.5, arr[i + 1] - s * 0.5, s, s);
+      }
+    }
+
+    // subtle bloom around the core (additive radial gradient)
+    var glowR = MAXR * 0.30;
+    var grad = ctx.createRadialGradient(0, 0, 0, 0, 0, glowR);
+    grad.addColorStop(0, 'rgba(255,215,168,0.55)');
+    grad.addColorStop(0.25, 'rgba(255,200,140,0.22)');
+    grad.addColorStop(0.6, 'rgba(255,180,120,0.07)');
+    grad.addColorStop(1, 'rgba(255,180,120,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, glowR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // tiny hot center
+    var grad2 = ctx.createRadialGradient(0, 0, 0, 0, 0, MAXR * 0.06);
+    grad2.addColorStop(0, 'rgba(255,245,225,0.9)');
+    grad2.addColorStop(1, 'rgba(255,220,170,0)');
+    ctx.fillStyle = grad2;
+    ctx.beginPath();
+    ctx.arc(0, 0, MAXR * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

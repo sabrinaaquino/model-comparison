@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0b0b0d}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W,H,RW,RH,acc,img,off,octx,frame=0;
+function resize(){
+  W=innerWidth;H=innerHeight;cv.width=W;cv.height=H;
+  RW=Math.min(300,Math.max(2,W));
+  RH=Math.max(2,Math.round(RW*H/W));
+  off=document.createElement('canvas');off.width=RW;off.height=RH;
+  octx=off.getContext('2d');
+  img=octx.createImageData(RW,RH);
+  acc=new Float32Array(RW*RH*3);
+  frame=0;
+}
+addEventListener('resize',resize);resize();
+
+// scene
+const spheres=[
+  {x:-2.3,y:1.0,z:0.3,r:1.0,type:0,cr:0.85,cg:0.32,cb:0.12}, // matte
+  {x:0.2,y:1.3,z:-1.2,r:1.3,type:1,cr:0.95,cg:0.96,cb:0.97}, // mirror
+  {x:2.4,y:0.9,z:0.9,r:0.9,type:2,cr:0.35,cg:0.55,cb:0.95},  // glossy
+  {x:-1.5,y:6.5,z:3.5,r:1.4,type:3,er:16,eg:15,eb:13}        // light
+];
+const LI=3;
+const light=spheres[LI];
+
+let iT,iId;
+function intersect(ox,oy,oz,dx,dy,dz,tmax){
+  iT=tmax;iId=-1;
+  if(dy<-1e-9||dy>1e-9){
+    const tp=-oy/dy;
+    if(tp>1e-3&&tp<iT){iT=tp;iId=-2;}
+  }
+  for(let i=0;i<spheres.length;i++){
+    const s=spheres[i];
+    const lx=s.x-ox,ly=s.y-oy,lz=s.z-oz;
+    const b=lx*dx+ly*dy+lz*dz;
+    const c2=lx*lx+ly*ly+lz*lz-s.r*s.r;
+    const disc=b*b-c2;
+    if(disc<0)continue;
+    const sq=Math.sqrt(disc);
+    let t=b-sq;
+    if(t<1e-3){t=b+sq;if(t<1e-3)continue;}
+    if(t<iT){iT=t;iId=i;}
+  }
+}
+
+const RU=[0,0,0];
+function randUnit(){
+  let x,y,z,l;
+  do{
+    x=Math.random()*2-1;y=Math.random()*2-1;z=Math.random()*2-1;
+    l=x*x+y*y+z*z;
+  }while(l>1||l<1e-8);
+  l=Math.sqrt(l);
+  RU[0]=x/l;RU[1]=y/l;RU[2]=z/l;
+}
+
+// returns geometric weight for direct light sampling (soft shadow)
+function directLight(px,py,pz,nx,ny,nz){
+  randUnit();
+  let ux=RU[0],uy=RU[1],uz=RU[2];
+  const tox=px-light.x,toy=py-light.y,toz=pz-light.z;
+  if(ux*tox+uy*toy+uz*toz<0){ux=-ux;uy=-uy;uz=-uz;}
+  const lpx=light.x+ux*light.r,lpy=light.y+uy*light.r,lpz=light.z+uz*light.r;
+  let dx=lpx-px,dy=lpy-py,dz=lpz-pz;
+  const dist=Math.sqrt(dx*dx+dy*dy+dz*dz);
+  if(dist<1e-4)return 0;
+  dx/=dist;dy/=dist;dz/=dist;
+  const cosS=nx*dx+ny*dy+nz*dz;
+  if(cosS<=0)return 0;
+  const cosL=-(ux*dx+uy*dy+uz*dz);
+  if(cosL<=0)return 0;
+  intersect(px+nx*0.002,py+ny*0.002,pz+nz*0.002,dx,dy,dz,dist-0.02);
+  if(iId!==-1)return 0;
+  const area=2*Math.PI*light.r*light.r; // hemisphere facing p
+  return cosS*cosL*area/(dist*dist);
+}
+
+let TR,TG,TB;
+function trace(ox,oy,oz,dx,dy,dz){
+  let cr=0,cg=0,cb=0,tr=1,tg=1,tb=1,spec=true;
+  for(let d=0;d<4;d++){
+    intersect(ox,oy,oz,dx,dy,dz,1e9);
+    if(iId===-1){cr+=tr*0.015;cg+=tg*0.017;cb+=tb*0.022;break;}
+    const t=iT;
+    const px=ox+dx*t,py=oy+dy*t,pz=oz+dz*t;
+    let nx,ny,nz,mtype,ar,ag,ab;
+    if(iId===-2){
+      nx=0;ny=1;nz=0;mtype=0;
+      const ch=((Math.floor(px*0.7)+Math.floor(pz*0.7))&1)!==0;
+      const v=ch?0.60:0.22;
+      ar=v;ag=v;ab=v*1.04;
+    }else{
+      const s=spheres[iId];
+      nx=(px-s.x)/s.r;ny=(py-s.y)/s.r;nz=(pz-s.z)/s.r;
+      if(s.type===3){
+        if(spec){cr+=tr*s.er;cg+=tg*s.eg;cb+=tb*s.eb;}
+        break;
+      }
+      mtype=s.type;ar=s.cr;ag=s.cg;ab=s.cb;
+    }
+    if(nx*dx+ny*dy+nz*dz>0){nx=-nx;ny=-ny;nz=-nz;}
+
+    // next event estimation for diffuse component
+    const kd=(mtype===0)?1:(mtype===2?0.25:0);
+    if(kd>0){
+      const w=directLight(px,py,pz,nx,ny,nz);
+      if(w>0){
+        const f=kd*w/Math.PI;
+        cr+=tr*ar*f*light.er;
+        cg+=tg*ag*f*light.eg;
+        cb+=tb*ab*f*light.eb;
+      }
+    }
+
+    // bounce
+    if(mtype===0){
+      randUnit();
+      let bx=nx+RU[0],by=ny+RU[1],bz=nz+RU[2];
+      let bl=Math.sqrt(bx*bx+by*by+bz*bz);
+      if(bl<1e-6){bx=nx;by=ny;bz=nz;bl=1;}
+      dx=bx/bl;dy=by/bl;dz=bz/bl;
+      tr*=ar;tg*=ag;tb*=ab;
+      spec=false;
+    }else{
+      const dn=dx*nx+dy*ny+dz*nz;
+      let rx=dx-2*dn*nx,ry=dy-2*dn*ny,rz=dz-2*dn*nz;
+      if(mtype===2){
+        randUnit();
+        const g=0.18;
+        rx+=RU[0]*g;ry+=RU[1]*g;rz+=RU[2]*g;
+        let rl=Math.sqrt(rx*rx+ry*ry+rz*rz);
+        rx/=rl;ry/=rl;rz/=rl;
+        const rn=rx*nx+ry*ny+rz*nz;
+        if(rn<0){rx-=2*rn*nx;ry-=2*rn*ny;rz-=2*rn*nz;}
+        tr*=ar*0.8+0.1;tg*=ag*0.8+0.1;tb*=ab*0.8+0.1;
+      }else{
+        tr*=0.93;tg*=0.94;tb*=0.96;
+      }
+      dx=rx;dy=ry;dz=rz;
+      spec=true;
+    }
+    ox=px+nx*0.002;oy=py+ny*0.002;oz=pz+nz*0.002;
+    // russian roulette on late bounces
+    if(d>=2){
+      const q=Math.max(tr,Math.max(tg,tb));
+      if(Math.random()>q)break;
+      tr/=q;tg/=q;tb/=q;
+    }
+  }
+  TR=cr;TG=cg;TB=cb;
+}
+
+function render(time){
+  const tsec=time*0.001;
+  const ang=tsec*0.10;
+  const camX=Math.cos(ang)*8.5,camZ=Math.sin(ang)*8.5,camY=3.2;
+  const tgtX=0,tgtY=1.0,tgtZ=0;
+  let fx=tgtX-camX,fy=tgtY-camY,fz=tgtZ-camZ;
+  let fl=Math.sqrt(fx*fx+fy*fy+fz*fz);fx/=fl;fy/=fl;fz/=fl;
+  // right = f x up(0,1,0)
+  let rx=fz*0-fy*0+ (fy*0 - fz*1)*0; // placeholder, compute properly below
+  rx=fy*0-fz*1; // wrong sign path; do explicit cross(f,(0,1,0))
+  let cxx=fy*0-fz*1, cxy=fz*0-fx*0, cxz=fx*1-fy*0;
+  let rl=Math.sqrt(cxx*cxx+cxy*cxy+cxz*cxz);
+  const Rx=cxx/rl,Ry=cxy/rl,Rz=cxz/rl;
+  const Ux=Ry*fz-Rz*fy,Uy=Rz*fx-Rx*fz,Uz=Rx*fy-Ry*fx;
+
+  frame++;
+  const wgt=1/Math.min(frame,48);
+  const tanF=0.55,aspect=RW/RH;
+  const data=img.data;
+  let ai=0,pi=0;
+  for(let y=0;y<RH;y++){
+    for(let x=0;x<RW;x++){
+      const u=((x+Math.random())/RW*2-1)*tanF*aspect;
+      const v=(1-(y+Math.random())/RH*2)*tanF;
+      let dx=fx+Rx*u+Ux*v,dy=fy+Ry*u+Uy*v,dz=fz+Rz*u+Uz*v;
+      const dl=Math.sqrt(dx*dx+dy*dy+dz*dz);
+      dx/=dl;dy/=dl;dz/=dl;
+      trace(camX,camY,camZ,dx,dy,dz);
+      acc[ai]+=(TR-acc[ai])*wgt;
+      acc[ai+1]+=(TG-acc[ai+1])*wgt;
+      acc[ai+2]+=(TB-acc[ai+2])*wgt;
+      // tone map + gamma
+      let r=acc[ai],g=acc[ai+1],b=acc[ai+2];
+      r=r/(1+r*0.12);g=g/(1+g*0.12);b=b/(1+b*0.12);
+      if(r>1)r=1;if(g>1)g=1;if(b>1)b=1;if(r<0)r=0;if(g<0)g=0;if(b<0)b=0;
+      data[pi]=Math.pow(r,0.4545)*255;
+      data[pi+1]=Math.pow(g,0.4545)*255;
+      data[pi+2]=Math.pow(b,0.4545)*255;
+      data[pi+3]=255;
+      ai+=3;pi+=4;
+    }
+  }
+  octx.putImageData(img,0,0);
+  ctx.fillStyle='#0b0b0d';
+  ctx.fillRect(0,0,W,H);
+  ctx.imageSmoothingEnabled=true;
+  ctx.drawImage(off,0,0,W,H);
+  ctx.fillStyle='#e6e6e6';
+  ctx.font='12px monospace';
+  ctx.textBaseline='top';
+  ctx.fillText('spp: '+Math.min(frame,48)+'  res: '+RW+'x'+RH,10,10);
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

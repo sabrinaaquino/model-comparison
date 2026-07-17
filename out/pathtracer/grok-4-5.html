@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Path Tracer</title>
+<style>
+*{margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#000}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+"use strict";
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d", { alpha: false });
+
+function V(x, y, z) { return { x: x || 0, y: y || 0, z: z || 0 }; }
+function add(a, b) { return V(a.x + b.x, a.y + b.y, a.z + b.z); }
+function sub(a, b) { return V(a.x - b.x, a.y - b.y, a.z - b.z); }
+function mul(a, b) { return V(a.x * b.x, a.y * b.y, a.z * b.z); }
+function scale(a, s) { return V(a.x * s, a.y * s, a.z * s); }
+function dot(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+function cross(a, b) {
+  return V(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+}
+function len(a) { return Math.sqrt(dot(a, a)); }
+function norm(a) {
+  const l = len(a);
+  return l > 1e-12 ? scale(a, 1 / l) : V(0, 1, 0);
+}
+function reflect(i, n) { return sub(i, scale(n, 2 * dot(i, n))); }
+function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+function mix(a, b, t) { return add(scale(a, 1 - t), scale(b, t)); }
+
+const DIFF = 0, MIRROR = 1, GLOSSY = 2, LIGHT = 3;
+
+const spheres = [
+  { c: V(0, 1.2, 0), r: 1.2, mat: DIFF, col: V(0.85, 0.25, 0.18), rough: 0, emit: V(0, 0, 0) },
+  { c: V(-2.6, 0.9, 0.4), r: 0.9, mat: MIRROR, col: V(0.95, 0.95, 0.97), rough: 0, emit: V(0, 0, 0) },
+  { c: V(2.4, 0.75, -0.3), r: 0.75, mat: GLOSSY, col: V(0.95, 0.75, 0.2), rough: 0.18, emit: V(0, 0, 0) },
+  { c: V(-0.6, 0.45, 2.2), r: 0.45, mat: DIFF, col: V(0.2, 0.45, 0.85), rough: 0, emit: V(0, 0, 0) },
+  { c: V(1.5, 0.35, 1.8), r: 0.35, mat: GLOSSY, col: V(0.3, 0.85, 0.55), rough: 0.35, emit: V(0, 0, 0) },
+  { c: V(0.5, 6.5, -1.0), r: 1.4, mat: LIGHT, col: V(1, 1, 1), rough: 0, emit: V(18, 16, 14) }
+];
+
+const floorMat = { mat: DIFF, col: V(0.55, 0.55, 0.58), rough: 0, emit: V(0, 0, 0) };
+const floorY = 0;
+
+function hitSphere(ro, rd, s) {
+  const oc = sub(ro, s.c);
+  const b = dot(oc, rd);
+  const c = dot(oc, oc) - s.r * s.r;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const sq = Math.sqrt(disc);
+  let t = -b - sq;
+  if (t < 1e-4) t = -b + sq;
+  if (t < 1e-4) return null;
+  return t;
+}
+
+function hitPlane(ro, rd) {
+  if (Math.abs(rd.y) < 1e-8) return null;
+  const t = (floorY - ro.y) / rd.y;
+  if (t < 1e-4) return null;
+  return t;
+}
+
+function intersect(ro, rd) {
+  let bestT = Infinity;
+  let hit = null;
+  for (let i = 0; i < spheres.length; i++) {
+    const t = hitSphere(ro, rd, spheres[i]);
+    if (t !== null && t < bestT) {
+      bestT = t;
+      const p = add(ro, scale(rd, t));
+      const n = norm(sub(p, spheres[i].c));
+      hit = { t: t, p: p, n: n, obj: spheres[i], isFloor: false };
+    }
+  }
+  const tp = hitPlane(ro, rd);
+  if (tp !== null && tp < bestT) {
+    bestT = tp;
+    const p = add(ro, scale(rd, tp));
+    hit = { t: tp, p: p, n: V(0, 1, 0), obj: floorMat, isFloor: true };
+  }
+  return hit;
+}
+
+function orthoBasis(n) {
+  const w = n;
+  const a = Math.abs(w.x) > 0.1 ? V(0, 1, 0) : V(1, 0, 0);
+  const v = norm(cross(w, a));
+  const u = cross(v, w);
+  return { u: u, v: v, w: w };
+}
+
+function cosineHemisphere(n) {
+  const r1 = Math.random();
+  const r2 = Math.random();
+  const phi = 2 * Math.PI * r1;
+  const su = Math.sqrt(r2);
+  const x = Math.cos(phi) * su;
+  const y = Math.sin(phi) * su;
+  const z = Math.sqrt(1 - r2);
+  const b = orthoBasis(n);
+  return norm(add(add(scale(b.u, x), scale(b.v, y)), scale(b.w, z)));
+}
+
+function coneSample(dir, cosThetaMax) {
+  const r1 = Math.random();
+  const r2 = Math.random();
+  const cosTheta = 1 - r1 + r1 * cosThetaMax;
+  const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
+  const phi = 2 * Math.PI * r2;
+  const b = orthoBasis(dir);
+  return norm(add(add(scale(b.u, Math.cos(phi) * sinTheta), scale(b.v, Math.sin(phi) * sinTheta)), scale(b.w, cosTheta)));
+}
+
+function sampleLight(p) {
+  const L = spheres[spheres.length - 1];
+  const toC = sub(L.c, p);
+  const dist2 = dot(toC, toC);
+  const dist = Math.sqrt(dist2);
+  const cosA = Math.sqrt(Math.max(0, 1 - (L.r * L.r) / dist2));
+  const dir = coneSample(norm(toC), cosA);
+  const hit = intersect(add(p, scale(dir, 1e-4)), dir);
+  if (!hit || hit.obj !== L) return V(0, 0, 0);
+  const cosTheta = Math.max(0, -dot(hit.n, dir));
+  if (cosTheta < 1e-6) return V(0, 0, 0);
+  const solidAngle = 2 * Math.PI * (1 - cosA);
+  return scale(L.emit, solidAngle * cosTheta / Math.PI);
+}
+
+function radiance(ro, rd, depth) {
+  if (depth > 5) return V(0, 0, 0);
+  const hit = intersect(ro, rd);
+  if (!hit) return V(0.02, 0.02, 0.03);
+
+  const obj = hit.obj;
+  let n = hit.n;
+  if (dot(n, rd) > 0) n = scale(n, -1);
+  const p = hit.p;
+
+  if (obj.mat === LIGHT) {
+    return depth === 0 ? obj.emit : V(0, 0, 0);
+  }
+
+  let col = obj.col;
+  if (hit.isFloor) {
+    const checker = (Math.floor(p.x + 100) + Math.floor(p.z + 100)) & 1;
+    col = checker ? V(0.62, 0.62, 0.65) : V(0.32, 0.32, 0.35);
+  }
+
+  if (obj.mat === MIRROR) {
+    const rdir = reflect(rd, n);
+    return mul(col, radiance(add(p, scale(n, 1e-4)), norm(rdir), depth + 1));
+  }
+
+  if (obj.mat === GLOSSY) {
+    const rdir = reflect(rd, n);
+    const rough = obj.rough;
+    const cosMax = Math.pow(0.001, rough * rough + 0.001);
+    const sdir = coneSample(norm(rdir), cosMax);
+    if (dot(sdir, n) <= 0) return V(0, 0, 0);
+    const direct = sampleLight(p);
+    const brdf = scale(col, 0.9);
+    const indirect = radiance(add(p, scale(n, 1e-4)), sdir, depth + 1);
+    return add(mul(brdf, direct), mul(brdf, indirect));
+  }
+
+  const direct = sampleLight(p);
+  const sdir = cosineHemisphere(n);
+  const indirect = radiance(add(p, scale(n, 1e-4)), sdir, depth + 1);
+  return add(mul(col, direct), mul(col, indirect));
+}
+
+let W = 0, H = 0;
+let accum = null;
+let sampleCount = 0;
+let imgData = null;
+let angle = 0;
+let lastAngle = -1;
+const targetInternal = 220;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+  const aspect = canvas.width / canvas.height;
+  W = targetInternal;
+  H = Math.max(1, Math.floor(targetInternal / aspect));
+  accum = new Float32Array(W * H * 3);
+  sampleCount = 0;
+  imgData = ctx.createImageData(W, H);
+  lastAngle = -1;
+}
+
+window.addEventListener("resize", resize);
+resize();
+
+function cameraRay(px, py, camPos, lookAt, fov) {
+  const forward = norm(sub(lookAt, camPos));
+  let right = cross(forward, V(0, 1, 0));
+  if (len(right) < 1e-6) right = V(1, 0, 0);
+  right = norm(right);
+  const up = norm(cross(right, forward));
+  const aspect = W / H;
+  const sx = ((px + Math.random()) / W) * 2 - 1;
+  const sy = 1 - ((py + Math.random()) / H) * 2;
+  const tanHalf = Math.tan(fov * 0.5);
+  const dir = norm(add(add(forward, scale(right, sx * tanHalf * aspect)), scale(up, sy * tanHalf)));
+  return { o: camPos, d: dir };
+}
+
+function frame(t) {
+  angle = t * 0.00012;
+  const camR = 7.5;
+  const camH = 2.8;
+  const camPos = V(Math.cos(angle) * camR, camH, Math.sin(angle) * camR);
+  const lookAt = V(0, 0.8, 0);
+  const fov = 0.75;
+
+  if (Math.abs(angle - lastAngle) > 1e-6) {
+    accum.fill(0);
+    sampleCount = 0;
+    lastAngle = angle;
+  }
+
+  const spp = 1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      let col = V(0, 0, 0);
+      for (let s = 0; s < spp; s++) {
+        const ray = cameraRay(x, y, camPos, lookAt, fov);
+        col = add(col, radiance(ray.o, ray.d, 0));
+      }
+      const i = (y * W + x) * 3;
+      accum[i] += col.x / spp;
+      accum[i + 1] += col.y / spp;
+      accum[i + 2] += col.z / spp;
+    }
+  }
+  sampleCount += spp;
+
+  const inv = 1 / sampleCount;
+  const data = imgData.data;
+  for (let i = 0, p = 0; i < W * H; i++, p += 4) {
+    const r = Math.pow(clamp01(accum[i * 3] * inv), 1 / 2.2);
+    const g = Math.pow(clamp01(accum[i * 3 + 1] * inv), 1 / 2.2);
+    const b = Math.pow(clamp01(accum[i * 3 + 2] * inv), 1 / 2.2);
+    data[p] = (r * 255) | 0;
+    data[p + 1] = (g * 255) | 0;
+    data[p + 2] = (b * 255) | 0;
+    data[p + 3] = 255;
+  }
+
+  const off = document.createElement("canvas");
+  off.width = W;
+  off.height = H;
+  const octx = off.getContext("2d");
+  octx.putImageData(imgData, 0, 0);
+
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#e6e6e6";
+  ctx.font = "12px monospace";
+  ctx.textBaseline = "top";
+  ctx.fillText("spp " + sampleCount, 10, 10);
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

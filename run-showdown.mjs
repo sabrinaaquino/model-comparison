@@ -146,6 +146,40 @@ const TASKS = [
       "ignore the ball/line rules above: draw the characters in a monospace font, color #e6e6e6 on the #0b0b0d background (no other colors), " +
       "centered and filling a good portion of the canvas. Keep it smooth at 60fps.",
   },
+  {
+    id: "pathtracer",
+    label: "Path tracer",
+    physics: "Ray-traced 3D rendering — reflections + soft shadows",
+    prompt:
+      `${COMMON} IGNORE the minimal ball/line style rules above — this is a rendered 3D scene, described here. Write a CPU path tracer / ray tracer ` +
+      "(no libraries) that renders a 3D scene: a few spheres of different sizes and materials — at least one matte colored, one mirror-reflective, " +
+      "and one glossy — resting on a large floor plane, lit by one light, with soft shadows, reflections, gamma correction, and anti-aliasing " +
+      "(multiple samples per pixel, accumulated across frames for a progressively refined image). Slowly orbit the camera around the scene so it " +
+      "stays alive. Dark background. Render at a modest internal resolution scaled to fill the canvas (or accumulate samples over frames) so it " +
+      "stays responsive. Correct shading, reflections, and shadows matter.",
+  },
+  {
+    id: "reactiondiff",
+    label: "Reaction-diffusion",
+    physics: "Gray-Scott Turing patterns + stability",
+    prompt:
+      `${COMMON} IGNORE the minimal ball/line style rules above — this is a grid simulation, described here. Implement a Gray-Scott reaction-diffusion ` +
+      "simulation (Turing patterns) on a grid: update two chemical concentrations each frame with diffusion (Laplacian), a feed rate and a kill rate " +
+      "tuned to produce organic evolving patterns (spots / stripes / mazes). Seed the center automatically at start so patterns grow on their own — " +
+      "NO user input. Render the field to fill the whole canvas via per-pixel ImageData, mapping concentration to this ramp: #0b0b0d -> #1e3a8a -> " +
+      "#4fd1ff -> #eaf6ff. Run at a good resolution, keep it smooth at 60fps, and stay stable — patterns must visibly evolve and never blow up to a flat color.",
+  },
+  {
+    id: "galaxy",
+    label: "Galaxy",
+    physics: "Particle galaxy — spiral structure + rendering",
+    prompt:
+      `${COMMON} IGNORE the minimal ball/line style rules above — this is a particle showpiece, described here. Render a spiral galaxy made of at least ` +
+      "8000 stars (particles) placed with branch-angle + spin-angle math so they form spiral arms, with a bright dense core and sparser outer arms. " +
+      "Color each star by its radius, from a warm core (#ffd7a8) to cool blue outer arms (#4fd1ff), drawn with additive blending so overlapping stars " +
+      "glow. Slowly rotate the whole galaxy on its own (auto, no input needed), with a subtle glow/bloom around the core. Black background. Keep it " +
+      "smooth at 60fps.",
+  },
 ];
 
 function extractHtml(text) {
@@ -252,7 +286,8 @@ const taskFilter = args.find((a) => a.startsWith("--task="))?.slice(7);
 const modelFilter = args.find((a) => a.startsWith("--model="))?.slice(8);
 const effortOverride = args.find((a) => a.startsWith("--effort="))?.slice(9);
 const modelIds = modelFilter ? modelFilter.split(",").map((s) => s.trim()) : null;
-const tasks = taskFilter ? TASKS.filter((t) => t.id === taskFilter) : TASKS;
+const taskIds = taskFilter ? taskFilter.split(",").map((s) => s.trim()) : null;
+const tasks = taskIds ? TASKS.filter((t) => taskIds.includes(t.id)) : TASKS;
 const models = modelIds ? MODELS.filter((m) => modelIds.includes(m.id)) : MODELS;
 if (!tasks.length || !models.length) {
   console.error("No matching task/model. Tasks:", TASKS.map((t) => t.id).join(", "));
