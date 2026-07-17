@@ -22,7 +22,7 @@ const MODELS = [
   { id: "openai-gpt-56-sol", label: "GPT-5.6 Sol" },
   // GLM 5.2 thinks at length; give it headroom and cap reasoning effort so
   // the answer isn't swallowed by the thinking budget.
-  { id: "zai-org-glm-5-2", label: "GLM 5.2", maxTokens: 24000, reasoningEffort: "low" },
+  { id: "kimi-k3", label: "Kimi K3", maxTokens: 24000 },
   { id: "grok-4-5", label: "Grok 4.5" },
 ];
 
@@ -160,7 +160,7 @@ async function runCell(task, model) {
   const outDir = join(ROOT, "out", task.id);
   const t0 = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12 * 60 * 1000);
+  const timer = setTimeout(() => controller.abort(), Number(process.env.TIMEOUT_MS) || 12 * 60 * 1000);
   const url = "https://api.venice.ai/api/v1/chat/completions";
   const headers = { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" };
   const baseBody = {

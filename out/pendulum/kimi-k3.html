@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;}
+canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+
+var W = 0, H = 0;
+var trail = [];
+var TRAIL_MAX = 600;
+var BOB_R = 12;
+
+function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W;
+    canvas.height = H;
+    trail.length = 0;
+}
+window.addEventListener('resize', resize);
+
+// Physical parameters (SI units)
+var g = 9.81;
+var L1 = 1.1, L2 = 0.9;
+var m1 = 1.2, m2 = 0.9;
+
+// State: [theta1, omega1, theta2, omega2], angles from downward vertical
+var state = [2.35, 0.0, 2.9, 0.0];
+var simT = 0.0;
+
+var k1 = [0,0,0,0], k2 = [0,0,0,0], k3 = [0,0,0,0], k4 = [0,0,0,0], tmp = [0,0,0,0];
+
+function deriv(y, out) {
+    var th1 = y[0], w1 = y[1], th2 = y[2], w2 = y[3];
+    var d = th1 - th2;
+    var sd = Math.sin(d), cd = Math.cos(d);
+    var den = 2*m1 + m2 - m2*Math.cos(2*d);
+    out[0] = w1;
+    out[1] = (-g*(2*m1+m2)*Math.sin(th1)
+              - m2*g*Math.sin(th1 - 2*th2)
+              - 2*sd*m2*(w2*w2*L2 + w1*w1*L1*cd)) / (L1*den);
+    out[2] = w2;
+    out[3] = (2*sd*(w1*w1*L1*(m1+m2)
+              + g*(m1+m2)*Math.cos(th1)
+              + w2*w2*L2*m2*cd)) / (L2*den);
+}
+
+function rk4(y, h) {
+    var i;
+    deriv(y, k1);
+    for (i = 0; i < 4; i++) tmp[i] = y[i] + 0.5*h*k1[i];
+    deriv(tmp, k2);
+    for (i = 0; i < 4; i++) tmp[i] = y[i] + 0.5*h*k2[i];
+    deriv(tmp, k3);
+    for (i = 0; i < 4; i++) tmp[i] = y[i] + h*k3[i];
+    deriv(tmp, k4);
+    for (i = 0; i < 4; i++) y[i] += (h/6)*(k1[i] + 2*k2[i] + 2*k3[i] + k4[i]);
+}
+
+function totalEnergy() {
+    var th1 = state[0], w1 = state[1], th2 = state[2], w2 = state[3];
+    var ke = 0.5*m1*L1*L1*w1*w1
+           + 0.5*m2*(L1*L1*w1*w1 + L2*L2*w2*w2 + 2*L1*L2*w1*w2*Math.cos(th1-th2));
+    var pe = -(m1+m2)*g*L1*Math.cos(th1) - m2*g*L2*Math.cos(th2);
+    return ke + pe;
+}
+
+function render() {
+    ctx.fillStyle = '#0b0b0d';
+    ctx.fillRect(0, 0, W, H);
+
+    var s = 0.38 * Math.min(W, H) / (L1 + L2);
+    var px = W / 2, py = H * 0.42;
+    var th1 = state[0], th2 = state[2];
+    var x1 = px + s*L1*Math.sin(th1), y1 = py + s*L1*Math.cos(th1);
+    var x2 = x1 + s*L2*Math.sin(th2), y2 = y1 + s*L2*Math.cos(th2);
+
+    // Trail of lower bob
+    trail.push(x2, y2);
+    if (trail.length > TRAIL_MAX*2) trail.splice(0, trail.length - TRAIL_MAX*2);
+    if (trail.length >= 4) {
+        ctx.strokeStyle = 'rgba(255,138,61,0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(trail[0], trail[1]);
+        for (var i = 2; i < trail.length; i += 2) ctx.lineTo(trail[i], trail[i+1]);
+        ctx.stroke();
+    }
+
+    // Rods (stroke only)
+    ctx.strokeStyle = '#e6e6e6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(x1, y1);
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // Pivot marker (static structure, stroke only)
+    ctx.beginPath();
+    ctx.arc(px, py, 4, 0, Math.PI*2);
+    ctx.stroke();
+
+    // Bobs (solid fill, no outline)
+    ctx.fillStyle = '#ff8a3d';
+    ctx.beginPath();
+    ctx.arc(x1, y1, BOB_R, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x2, y2, BOB_R, 0, Math.PI*2);
+    ctx.fill();
+
+    // On-screen text
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('t = ' + simT.toFixed(1) + ' s', 10, 10);
+    ctx.fillText('E = ' + totalEnergy().toFixed(2) + ' J', 10, 26);
+}
+
+var DT = 1/480;
+var acc = 0;
+var last = performance.now();
+
+function frame(now) {
+    var dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    acc += dt;
+    while (acc >= DT) {
+        rk4(state, DT);
+        simT += DT;
+        acc -= DT;
+    }
+    render();
+    requestAnimationFrame(frame);
+}
+
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

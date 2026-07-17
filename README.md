@@ -12,7 +12,7 @@ Every generation runs through the [Venice API](https://venice.ai).
 | --- | --- | --- |
 | 1 | Claude Fable 5 | Anthropic |
 | 2 | GPT-5.6 Sol | OpenAI |
-| 3 | GLM 5.2 | Zhipu |
+| 3 | Kimi K3 | Moonshot |
 | 4 | Grok 4.5 | xAI |
 
 ## The events

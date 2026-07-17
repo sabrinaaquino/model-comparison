@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>projectiles</title>
+<style>
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0b0b0d;}
+canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W = 0, H = 0, floorY = 0, wallL = 0, wallR = 0;
+
+const R = 7;                 // object radius (override)
+const MAX_BALLS = 120;
+const G = 1400;              // gravity px/s^2
+const REST_WALL = 0.45;
+const REST_BALL = 0.35;
+const VMAX = 1600;
+const TRAIL_LEN = 14;
+const SPAWN_INTERVAL = 0.12;
+
+const balls = [];
+let aim = -Math.PI / 3;      // current launcher aim (radians)
+let spawnTimer = 0;
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W;
+  canvas.height = H;
+  floorY = H - 30;
+  wallL = 30;
+  wallR = W - 30;
+  for (const b of balls) {
+    if (b.x < wallL + R) b.x = wallL + R;
+    if (b.x > wallR - R) b.x = wallR - R;
+    if (b.y > floorY - R) b.y = floorY - R;
+  }
+}
+window.addEventListener('resize', resize);
+
+function spawn() {
+  let b;
+  if (balls.length >= MAX_BALLS) {
+    b = balls.shift();           // recycle oldest
+  } else {
+    b = { x: 0, y: 0, vx: 0, vy: 0, touch: false, trail: [] };
+  }
+  balls.push(b);
+
+  const deg = 42 + Math.random() * 30;                 // 42..72 degrees
+  aim = -deg * Math.PI / 180;
+  let spd = 540 + Math.random() * 420;
+  const bx = wallL + 34, by = floorY - 26;
+  // cap speed so the arc stays on screen even for small windows
+  const maxSpd = Math.sqrt(2 * G * Math.max(60, by - 20)) / Math.sin(deg * Math.PI / 180);
+  if (spd > maxSpd) spd = maxSpd;
+
+  let sx = bx + Math.cos(aim) * 30;
+  let sy = by + Math.sin(aim) * 30;
+  // nudge spawn point upward until it does not overlap the pile
+  for (let k = 0; k < 15; k++) {
+    let free = true;
+    for (let i = 0; i < balls.length - 1; i++) {
+      const o = balls[i];
+      const dx = sx - o.x, dy = sy - o.y;
+      if (dx * dx + dy * dy < (R * 2 + 1) * (R * 2 + 1)) { free = false; break; }
+    }
+    if (free) break;
+    sy -= R * 2;
+  }
+  if (sy < R) sy = R;
+
+  b.x = sx; b.y = sy;
+  b.vx = Math.cos(aim) * spd;
+  b.vy = Math.sin(aim) * spd;
+  b.touch = false;
+  b.trail.length = 0;
+}
+
+function physics(dt) {
+  const SUB = 3;
+  const h = dt / SUB;
+  const n = balls.length;
+  for (let s = 0; s < SUB; s++) {
+    // integrate + wall constraints (positional clamps: can never tunnel)
+    for (let i = 0; i < n; i++) {
+      const b = balls[i];
+      b.vy += G * h;
+      if (b.vx > VMAX) b.vx = VMAX; else if (b.vx < -VMAX) b.vx = -VMAX;
+      if (b.vy > VMAX) b.vy = VMAX; else if (b.vy < -VMAX) b.vy = -VMAX;
+      b.x += b.vx * h;
+      b.y += b.vy * h;
+      b.touch = false;
+      if (b.y + R > floorY) {
+        b.y = floorY - R;
+        if (b.vy > 0) b.vy = b.vy > 100 ? -b.vy * REST_WALL : 0;
+        b.vx *= 0.99;
+        b.touch = true;
+      }
+      if (b.x - R < wallL) {
+        b.x = wallL + R;
+        if (b.vx < 0) b.vx = -b.vx * REST_WALL;
+        b.touch = true;
+      } else if (b.x + R > wallR) {
+        b.x = wallR - R;
+        if (b.vx > 0) b.vx = -b.vx * REST_WALL;
+        b.touch = true;
+      }
+    }
+    // ball-ball collisions: positional correction + impulse with friction
+    for (let it = 0; it < 3; it++) {
+      for (let i = 0; i < n; i++) {
+        const a = balls[i];
+        for (let j = i + 1; j < n; j++) {
+          const b = balls[j];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const rr = R * 2;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= rr * rr) continue;
+          let d, nx, ny;
+          if (d2 > 1e-9) {
+            d = Math.sqrt(d2); nx = dx / d; ny = dy / d;
+          } else { d = 0.001; nx = 0; ny = -1; }
+          const overlap = rr - d;
+          const corr = overlap * 0.45;
+          a.x -= nx * corr; a.y -= ny * corr;
+          b.x += nx * corr; b.y += ny * corr;
+          a.touch = true; b.touch = true;
+          const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+          const vn = rvx * nx + rvy * ny;
+          if (vn < 0) {
+            const e = vn < -60 ? REST_BALL : 0;   // no bounce at low speed -> no jitter
+            const ji = -(1 + e) * vn * 0.5;
+            const ix = ji * nx, iy = ji * ny;
+            a.vx -= ix; a.vy -= iy;
+            b.vx += ix; b.vy += iy;
+            const tx = -ny, ty = nx;
+            const vt = rvx * tx + rvy * ty;
+            let jt = -vt * 0.5;
+            const m = 0.3 * ji;
+            if (jt > m) jt = m; else if (jt < -m) jt = -m;
+            a.vx -= jt * tx; a.vy -= jt * ty;
+            b.vx += jt * tx; b.vy += jt * ty;
+          }
+        }
+      }
+    }
+    // settle slow contacts to keep piles dead stable
+    for (let i = 0; i < n; i++) {
+      const b = balls[i];
+      if (b.touch && b.vx * b.vx + b.vy * b.vy < 225) {
+        b.vx *= 0.8; b.vy *= 0.8;
+      }
+    }
+  }
+}
+
+function draw() {
+  // solid background, repainted every frame
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  // static structure: side walls, floor, launcher
+  ctx.strokeStyle = '#e6e6e6';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(wallL, 0);
+  ctx.lineTo(wallL, floorY);
+  ctx.lineTo(wallR, floorY);
+  ctx.lineTo(wallR, 0);
+  const bx = wallL + 34, by = floorY - 26;
+  ctx.moveTo(bx, by);
+  ctx.lineTo(bx + Math.cos(aim) * 30, by + Math.sin(aim) * 30);
+  ctx.stroke();
+
+  // motion trails
+  ctx.strokeStyle = 'rgba(255,138,61,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const b of balls) {
+    const t = b.trail;
+    if (t.length > 3) {
+      ctx.moveTo(t[0], t[1]);
+      for (let k = 2; k < t.length; k += 2) ctx.lineTo(t[k], t[k + 1]);
+    }
+  }
+  ctx.stroke();
+
+  // objects
+  ctx.fillStyle = '#ff8a3d';
+  ctx.beginPath();
+  for (const b of balls) {
+    ctx.moveTo(b.x + R, b.y);
+    ctx.arc(b.x, b.y, R, 0, Math.PI * 2);
+  }
+  ctx.fill();
+
+  // counter text
+  ctx.fillStyle = '#e6e6e6';
+  ctx.font = '12px monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillText('objects: ' + balls.length, 10, 10);
+}
+
+let last = performance.now();
+let acc = 0;
+const DT = 1 / 60;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  let ft = (now - last) / 1000;
+  last = now;
+  if (ft > 0.05) ft = 0.05;
+  acc += ft;
+  while (acc >= DT) {
+    spawnTimer -= DT;
+    if (spawnTimer <= 0) {
+      spawn();
+      spawnTimer += SPAWN_INTERVAL;
+    }
+    physics(DT);
+    for (const b of balls) {
+      b.trail.push(b.x, b.y);
+      if (b.trail.length > TRAIL_LEN * 2) b.trail.splice(0, b.trail.length - TRAIL_LEN * 2);
+    }
+    acc -= DT;
+  }
+  draw();
+}
+
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

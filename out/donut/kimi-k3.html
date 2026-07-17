@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASCII Donut</title>
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0b0d;
+}
+canvas {
+  display: block;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const COLS = 80;
+const ROWS = 44;
+const RAMP = '.,-~:;=!*#$@';
+const TWO_PI = Math.PI * 2;
+const I_STEP = 0.02;
+const J_STEP = 0.07;
+
+// Precompute sample angles (same sampling as the original donut.c).
+const iAngles = [];
+for (let i = 0; i < TWO_PI; i += I_STEP) iAngles.push(i);
+const jAngles = [];
+for (let j = 0; j < TWO_PI; j += J_STEP) jAngles.push(j);
+
+const I_N = iAngles.length;
+const J_N = jAngles.length;
+const sinI = new Float64Array(I_N), cosI = new Float64Array(I_N);
+const sinJ = new Float64Array(J_N), cosJ = new Float64Array(J_N);
+for (let k = 0; k < I_N; k++) { sinI[k] = Math.sin(iAngles[k]); cosI[k] = Math.cos(iAngles[k]); }
+for (let k = 0; k < J_N; k++) { sinJ[k] = Math.sin(jAngles[k]); cosJ[k] = Math.cos(jAngles[k]); }
+
+const zbuf = new Float32Array(COLS * ROWS);
+const cells = new Array(COLS * ROWS);
+
+let W = 0, H = 0;
+let fontSize = 16, cellW = 9.6, cellH = 16, offX = 0, offY = 0;
+let scaleX = 30, scaleY = 18;
+let A = 0, B = 0;
+
+function layout() {
+  let fs = Math.floor(Math.min(H / ROWS, W / (COLS * 0.6)) * 0.96);
+  if (fs < 4) fs = 4;
+  ctx.font = fs + 'px monospace';
+  let cw = ctx.measureText('MMMMMMMMMMMMMMMMMMMM').width / 20;
+  const maxGridW = W * 0.98;
+  if (COLS * cw > maxGridW) {
+    fs = Math.max(4, Math.floor(fs * maxGridW / (COLS * cw)));
+    ctx.font = fs + 'px monospace';
+    cw = ctx.measureText('MMMMMMMMMMMMMMMMMMMM').width / 20;
+  }
+  fontSize = fs;
+  cellW = cw;
+  cellH = fs;
+  offX = (W - COLS * cellW) / 2;
+  offY = (H - ROWS * cellH) / 2;
+  scaleX = COLS * 0.375;              // 30 cells for 80 columns
+  scaleY = scaleX * cellW / cellH;    // keeps the torus circular in pixels
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  layout();
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+let last = performance.now();
+
+function frame(now) {
+  let dt = (now - last) / (1000 / 60);
+  last = now;
+  if (!(dt > 0) || dt > 5) dt = 1;
+  A += 0.04 * dt;
+  B += 0.02 * dt;
+
+  zbuf.fill(0);
+  cells.fill(' ');
+
+  const sinA = Math.sin(A), cosA = Math.cos(A);
+  const sinB = Math.sin(B), cosB = Math.cos(B);
+  const halfC = COLS / 2, halfR = ROWS / 2;
+
+  for (let jj = 0; jj < J_N; jj++) {
+    const sj = sinJ[jj], cj = cosJ[jj];
+    const h = cj + 2;                 // R2 + R1*cos(j)
+    const sjCosA = sj * cosA;
+    const sjSinA = sj * sinA;
+    for (let ii = 0; ii < I_N; ii++) {
+      const si = sinI[ii], ci = cosI[ii];
+      const D = 1 / (si * h * sinA + sjCosA + 5);
+      const t = si * h * cosA - sjSinA;
+      const x = (halfC + scaleX * D * (ci * h * cosB - t * sinB)) | 0;
+      const y = (halfR + scaleY * D * (ci * h * sinB + t * cosB)) | 0;
+      if (x < 0 || x >= COLS || y < 0 || y >= ROWS) continue;
+      const o = x + COLS * y;
+      if (D <= zbuf[o]) continue;
+      // Lambert luminance against light direction (0, 1, -1).
+      const N = (8 * ((sjSinA - si * cj * cosA) * cosB
+                      - si * cj * sinA - sjCosA - ci * cj * sinB)) | 0;
+      zbuf[o] = D;
+      cells[o] = RAMP[N > 0 ? (N > 11 ? 11 : N) : 0];
+    }
+  }
+
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#e6e6e6';
+  for (let y = 0; y < ROWS; y++) {
+    const base = y * COLS;
+    ctx.fillText(cells.slice(base, base + COLS).join(''), offX, offY + y * cellH);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;}
+canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Ball state stored relative to hexagon center (resize-safe).
+const ball = { x: 60, y: -60, vx: 280, vy: 0, r: 12 };
+let theta = 0;
+const OMEGA = 0.7;      // constant hexagon spin, rad/s
+const G = 1000;         // gravity px/s^2
+const REST = 0.78;      // restitution
+const MU = 0.25;        // Coulomb friction coefficient
+const MAXV = 2400;      // safety speed clamp (prevents tunneling)
+let bounces = 0;
+const trail = [];
+
+function apothem() { return Math.min(W, H) * 0.34; }
+
+function step(dt) {
+  ball.vy += G * dt;
+  ball.x += ball.vx * dt;
+  ball.y += ball.vy * dt;
+
+  const sp = Math.hypot(ball.vx, ball.vy);
+  if (sp > MAXV) { ball.vx *= MAXV / sp; ball.vy *= MAXV / sp; }
+
+  const a = apothem();
+  const limit = a - ball.r;
+
+  for (let i = 0; i < 6; i++) {
+    const ang = theta + i * Math.PI / 3;
+    const nx = Math.cos(ang), ny = Math.sin(ang);
+    const d = ball.x * nx + ball.y * ny;
+    if (d > limit) {
+      // Foot of perpendicular on the wall line (relative to center).
+      const fx = ball.x - nx * (d - a);
+      const fy = ball.y - ny * (d - a);
+      // Wall velocity at contact point due to rotation: v = omega x r.
+      const wvx = -OMEGA * fy, wvy = OMEGA * fx;
+      // Relative velocity in wall frame.
+      let rvx = ball.vx - wvx, rvy = ball.vy - wvy;
+      const vn = rvx * nx + rvy * ny;
+      if (vn > 0) {
+        let tx = rvx - vn * nx, ty = rvy - vn * ny;
+        const tmag = Math.hypot(tx, ty);
+        const jn = (1 + REST) * vn;
+        const jt = Math.min(MU * jn, tmag);
+        if (tmag > 1e-9) { tx -= jt * tx / tmag; ty -= jt * ty / tmag; }
+        const nvn = -REST * vn;
+        rvx = tx + nvn * nx;
+        rvy = ty + nvn * ny;
+        ball.vx = wvx + rvx;
+        ball.vy = wvy + rvy;
+        if (vn > 40) bounces++;
+      }
+      // Positional correction: ball can never escape.
+      ball.x -= nx * (d - limit);
+      ball.y -= ny * (d - limit);
+    }
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  const cx = W / 2, cy = H / 2;
+  const a = apothem();
+  const R = a / Math.cos(Math.PI / 6);
+
+  trail.push({ x: ball.x, y: ball.y });
+  if (trail.length > 70) trail.shift();
+  ctx.strokeStyle = 'rgba(255,138,61,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < trail.length; i++) {
+    const px = cx + trail[i].x, py = cy + trail[i].y;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  ctx.strokeStyle = '#e6e6e6';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const ang = theta + (i + 0.5) * Math.PI / 3;
+    const px = cx + R * Math.cos(ang), py = cy + R * Math.sin(ang);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  ctx.fillStyle = '#ff8a3d';
+  ctx.beginPath();
+  ctx.arc(cx + ball.x, cy + ball.y, ball.r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#e6e6e6';
+  ctx.font = '12px monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillText('bounces: ' + bounces, 10, 10);
+}
+
+let last = performance.now(), acc = 0;
+const DT = 1 / 240;
+function frame(now) {
+  let el = (now - last) / 1000;
+  last = now;
+  if (el > 0.1) el = 0.1;
+  acc += el;
+  while (acc >= DT) {
+    theta += OMEGA * DT;
+    step(DT);
+    acc -= DT;
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

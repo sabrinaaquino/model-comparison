@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Particle Ship</title>
+<style>
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0b0b0d;}
+canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W = 0, H = 0;
+let cols = 0, rows = 0, colSpacing = 0, rowSpacing = 15;
+let colX = [];
+let waterLevel = 0;
+
+const TWO_PI = Math.PI * 2;
+
+// ---------- color ramp: trough #1e3a8a -> mid #4fd1ff -> crest #eaf6ff ----------
+function hex2rgb(h){
+  return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+}
+const C_TROUGH = hex2rgb('#1e3a8a');
+const C_MID    = hex2rgb('#4fd1ff');
+const C_CREST  = hex2rgb('#eaf6ff');
+const RAMP = [];
+for(let i = 0; i <= 200; i++){
+  const t = i / 200;
+  let a, b, u;
+  if(t < 0.5){ a = C_TROUGH; b = C_MID;   u = t * 2; }
+  else       { a = C_MID;    b = C_CREST; u = (t - 0.5) * 2; }
+  const r = Math.round(a[0] + (b[0]-a[0]) * u);
+  const g = Math.round(a[1] + (b[1]-a[1]) * u);
+  const v = Math.round(a[2] + (b[2]-a[2]) * u);
+  RAMP.push('rgb(' + r + ',' + g + ',' + v + ')');
+}
+function rampColor(t){
+  if(t < 0) t = 0; else if(t > 1) t = 1;
+  return RAMP[Math.round(t * 200)];
+}
+
+// ---------- wave field: sum of a few traveling sine waves ----------
+const AMP_TOTAL = 26 + 13 + 8 + 6;
+function waveElev(x, t){
+  return 26 * Math.sin(0.011 * x - 1.15 * t)
+       + 13 * Math.sin(0.019 * x - 1.80 * t + 1.7)
+       +  8 * Math.sin(0.031 * x - 2.70 * t + 3.9)
+       +  6 * Math.sin(0.006 * x + 0.55 * t + 0.9);
+}
+function surfaceY(x, t){ return waterLevel - waveElev(x, t); }
+
+// ---------- ship shape: compact cluster of particles (hull + mast) ----------
+const shipPts = [];
+(function buildShip(){
+  const hullRows = [
+    { y:  0, half: 30, step: 5.5 },
+    { y:  7, half: 26, step: 5.5 },
+    { y: 14, half: 17, step: 5.4 },
+    { y: 20, half:  8, step: 5.2 }
+  ];
+  for(const r of hullRows){
+    for(let x = -r.half; x <= r.half + 0.001; x += r.step){
+      shipPts.push([x, r.y]);
+    }
+  }
+  for(let y = -6; y >= -40; y -= 5){
+    shipPts.push([0, y]); // mast
+  }
+})();
+const SHIP_R = 3.2;
+
+// ---------- ship physics state (buoyancy springs) ----------
+const ship = { y: 0, vy: 0, a: 0, va: 0 };
+
+// ---------- resize ----------
+function resize(){
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  waterLevel = H * 0.62;
+
+  cols = Math.max(40, Math.round(W / 18));
+  rows = Math.max(4, Math.round(600 / cols));
+  colSpacing = W / (cols - 1);
+  colX = new Array(cols);
+  for(let i = 0; i < cols; i++) colX[i] = i * colSpacing;
+
+  if(ship.y === 0) ship.y = waterLevel;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------- main loop ----------
+function frame(nowMs){
+  const t = nowMs * 0.001;
+
+  // solid background, repainted every frame
+  ctx.fillStyle = '#0b0b0d';
+  ctx.fillRect(0, 0, W, H);
+
+  // ----- ocean particles -----
+  const pr = Math.max(2.4, Math.min(3.6, colSpacing * 0.22));
+  for(let i = 0; i < cols; i++){
+    const x = colX[i];
+    const e = waveElev(x, t);
+    const tt = (e + AMP_TOTAL) / (2 * AMP_TOTAL);
+    ctx.fillStyle = rampColor(tt);
+    ctx.beginPath();
+    for(let j = 0; j < rows; j++){
+      const decay = 1 / (1 + j * 0.35);          // deep water moves less
+      const px = x + (j % 2 ? colSpacing * 0.5 : 0);
+      const py = waterLevel - e * decay + j * rowSpacing;
+      ctx.moveTo(px + pr, py);
+      ctx.arc(px, py, pr, 0, TWO_PI);
+    }
+    ctx.fill();
+  }
+
+  // ----- ship buoyancy -----
+  const sx = W * 0.5 + 6 * Math.sin(t * 0.5);    // gentle surge
+  const targetY = surfaceY(sx, t) - 3;           // slight draft
+  const yL = surfaceY(sx - 24, t);
+  const yR = surfaceY(sx + 24, t);
+  let targetA = Math.atan2(yR - yL, 48);         // pitch from slope under hull
+  if(targetA >  0.55) targetA =  0.55;
+  if(targetA < -0.55) targetA = -0.55;
+
+  ship.vy += (targetY - ship.y) * 0.025;
+  ship.vy *= 0.90;
+  ship.y  += ship.vy;
+
+  ship.va += (targetA - ship.a) * 0.012;
+  ship.va *= 0.90;
+  ship.a  += ship.va;
+
+  // ----- draw ship particles -----
+  ctx.save();
+  ctx.translate(sx, ship.y);
+  ctx.rotate(ship.a);
+  ctx.fillStyle = '#ff8a3d';
+  ctx.beginPath();
+  for(let k = 0; k < shipPts.length; k++){
+    const p = shipPts[k];
+    ctx.moveTo(p[0] + SHIP_R, p[1]);
+    ctx.arc(p[0], p[1], SHIP_R, 0, TWO_PI);
+  }
+  ctx.fill();
+  ctx.restore();
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

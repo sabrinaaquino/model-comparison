@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Particle Fountain</title>
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#0b0b0d;}
+canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+  var canvas=document.getElementById('c');
+  var ctx=canvas.getContext('2d');
+
+  var W=0,H=0,floorY=0,cx=0,baseSpeed=1,speedRef=1;
+  var G=1500;        // gravity px/s^2
+  var DRAG=0.15;     // slight air drag
+  var REST=0.55;     // floor restitution (energy loss)
+  var FRICTION=0.85; // tangential loss on bounce
+  var N=1000;        // particle count (>=800)
+  var R=2;           // particle radius
+  var FADE=0.6;      // fade-out time at end of life
+  var TAU=Math.PI*2;
+
+  function resize(){
+    W=canvas.width=window.innerWidth;
+    H=canvas.height=window.innerHeight;
+    floorY=H-30;
+    cx=W/2;
+    baseSpeed=Math.sqrt(2*G*Math.max(100,(H-60))*0.85);
+    speedRef=baseSpeed*1.15;
+  }
+  window.addEventListener('resize',resize);
+  resize();
+
+  // Speed color ramp LUT: slow #3b82f6 -> medium #e6e6e6 -> fast #ffd23d (linear)
+  var C1=[59,130,246],C2=[230,230,230],C3=[255,210,61];
+  var LUT=[];
+  for(var i=0;i<64;i++){
+    var t=i/63,r,g,b,u;
+    if(t<0.5){u=t*2;r=C1[0]+(C2[0]-C1[0])*u;g=C1[1]+(C2[1]-C1[1])*u;b=C1[2]+(C2[2]-C1[2])*u;}
+    else{u=(t-0.5)*2;r=C2[0]+(C3[0]-C2[0])*u;g=C2[1]+(C3[1]-C2[1])*u;b=C2[2]+(C3[2]-C2[2])*u;}
+    LUT.push('rgb('+((r|0))+','+((g|0))+','+((b|0))+')');
+  }
+
+  function spawn(p){
+    p.x=cx+(Math.random()-0.5)*6;
+    p.y=floorY-R-1;
+    var ang=-Math.PI/2+(Math.random()-0.5)*0.45;
+    var sp=baseSpeed*(0.8+Math.random()*0.35);
+    p.vx=Math.cos(ang)*sp;
+    p.vy=Math.sin(ang)*sp;
+    p.maxLife=2.2+Math.random()*1.8;
+    p.life=p.maxLife;
+  }
+
+  var parts=[];
+  for(var i=0;i<N;i++){
+    var p={x:0,y:0,vx:0,vy:0,life:0,maxLife:1};
+    spawn(p);
+    p.life=Math.random()*p.maxLife; // stagger for continuous emission
+    parts.push(p);
+  }
+
+  var last=performance.now();
+  var fps=60;
+
+  function frame(now){
+    var dt=(now-last)/1000;
+    last=now;
+    if(dt>0.033)dt=0.033;
+    if(dt>0)fps=fps*0.95+(1/dt)*0.05;
+
+    // background
+    ctx.fillStyle='#0b0b0d';
+    ctx.fillRect(0,0,W,H);
+
+    // floor (static structure)
+    ctx.globalAlpha=1;
+    ctx.strokeStyle='#e6e6e6';
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(0,floorY);
+    ctx.lineTo(W,floorY);
+    ctx.stroke();
+
+    // particles
+    var k=1-DRAG*dt;
+    for(var i=0;i<N;i++){
+      var p=parts[i];
+      p.vy+=G*dt;
+      p.vx*=k;
+      p.vy*=k;
+      p.x+=p.vx*dt;
+      p.y+=p.vy*dt;
+
+      if(p.y+R>floorY){
+        p.y=floorY-R;
+        if(p.vy>0){
+          p.vy=-p.vy*REST;
+          p.vx*=FRICTION;
+        }
+      }
+
+      p.life-=dt;
+      if(p.life<=0||p.x<-20||p.x>W+20){
+        spawn(p);
+        continue;
+      }
+
+      var sp=Math.sqrt(p.vx*p.vx+p.vy*p.vy);
+      var t=sp/speedRef;
+      if(t>1)t=1;
+      ctx.fillStyle=LUT[(t*63)|0];
+      ctx.globalAlpha=p.life<FADE?(p.life/FADE):1;
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,R,0,TAU);
+      ctx.fill();
+    }
+
+    // FPS counter
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#e6e6e6';
+    ctx.font='12px monospace';
+    ctx.textBaseline='top';
+    ctx.textAlign='left';
+    ctx.fillText('FPS: '+Math.round(fps),10,10);
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
